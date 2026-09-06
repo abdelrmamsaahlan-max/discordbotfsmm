@@ -2,7 +2,6 @@ require('dotenv').config();
 const {
   Client,
   GatewayIntentBits,
-  Partials,
   REST,
   Routes,
   SlashCommandBuilder,
@@ -27,14 +26,10 @@ const commands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 ].map(command => command.toJSON());
 
+// Keep the bot on non-privileged intents for now. This avoids Discord's
+// "Used disallowed intents" error and is enough for slash-command features.
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ],
-  partials: [Partials.Channel, Partials.Message]
+  intents: [GatewayIntentBits.Guilds]
 });
 
 async function registerCommands() {
@@ -70,13 +65,10 @@ client.on('interactionCreate', async interaction => {
 
   if (interaction.commandName === 'server-stats') {
     const guild = interaction.guild;
-    await guild.members.fetch().catch(() => null);
-    const online = guild.members.cache.filter(m => m.presence?.status && m.presence.status !== 'offline').size;
     const embed = new EmbedBuilder()
       .setTitle('FSMM Server Stats')
       .addFields(
         { name: '👥 Members', value: String(guild.memberCount), inline: true },
-        { name: '🟢 Online', value: String(online), inline: true },
         { name: '💬 Channels', value: String(guild.channels.cache.size), inline: true }
       );
     return interaction.reply({ embeds: [embed] });
