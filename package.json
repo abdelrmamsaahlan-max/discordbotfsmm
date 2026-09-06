@@ -4,6 +4,7 @@
   "description": "FSMM Discord community bot",
   "main": "src/index.js",
   "scripts": {
+    "prestart": "node scripts/patch-panel-refresh.js",
     "start": "node src/index.js"
   },
   "engines": {
