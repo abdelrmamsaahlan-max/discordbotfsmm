@@ -1,10 +1,10 @@
 {
   "name": "fsmm-discord-bot",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "FSMM Discord ticket bot",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/register.js && node src/index.js"
   },
   "engines": {
     "node": ">=20"
