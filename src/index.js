@@ -406,6 +406,13 @@ async function showStats(interaction) {
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   try { await registerCommands(); } catch (e) { console.error('Command registration failed:', e); }
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID);
+    await ensureSetup(guild);
+    console.log('FSMM panels refreshed on startup.');
+  } catch (e) {
+    console.error('Startup panel refresh failed:', e);
+  }
 });
 
 client.on('interactionCreate', async interaction => {
