@@ -29,6 +29,7 @@ const MM_ROLE = 'FSMM Middleman';
 const CATEGORY = '🎫 FSMM TICKETS';
 const PANEL_NAMES = ['🤝・middleman', '🛟・support', '🎨・base-painting', '🎫・ticket-center', 'ticket-center', 'fsmm-ticket-panel'];
 
+// Real image URLs used in the ticket embeds. Discord select-menu options themselves cannot display images.
 const VALUE_IMAGES = {
   '10M - 250M': 'https://static.u7buy.com/2026/03/05/13f59a8a77664b9ba7c3881370a3dbb9.png',
   '250M - 500M': 'https://i.ebayimg.com/images/g/3-0AAeSw23NpZcT0/s-l1200.png',
@@ -36,7 +37,6 @@ const VALUE_IMAGES = {
   'OG': 'https://www.eldorado.gg/blog/wp-content/uploads/2025/12/Meowl.webp'
 };
 
-// Fandom's Special:Redirect/file endpoint lets Discord fetch the real wiki image.
 function baseImage(name) {
   const fileNames = {
     'Default': 'DefaultBase.png', 'Gold': 'GoldBase.png', 'Diamond': 'DiamondBase.png', 'Rainbow': 'RainbowBase.png',
@@ -45,21 +45,22 @@ function baseImage(name) {
     'Phantom': 'PhantomBase.png', 'Crystal': 'CrystalBase.png',
     'Halloween': 'HalloweenBase.png', 'Aquatic': 'AquaticBase.png', 'Christmas': 'ChristmasBase.png',
     'Gingerbread': 'GingerbreadBase.png', 'Taco': 'TacoBase.png', "Valentine's": 'ValentinesBase.png',
-    'Rose': 'RoseBase.png', 'Lucky': 'LuckyBase.png', 'Easter': 'EasterBase.png', 'Summer': 'SummerBase.png',
-    'Pot of Gold': 'PotOfGoldBase.png', 'Red Octo': 'RedOctoBase.png',
+    'Rose': 'RoseBase.png', 'Lucky': 'LuckyBase.png', 'Bunny Basket': 'BunnyBasketBase.png',
+    'Easter': 'EasterBase.png', 'Summer': 'SummerBase.png', 'Pot of Gold': 'PotOfGoldBase.png',
+    'Red Octo': 'RedOctoBase.png', 'Bee Emperor': 'BeeEmperorBase.png', 'Honey Bee': 'HoneyBeeBase.png',
     'Strawberry': 'StrawberryBase.png', 'Meowl': 'MeowlBase.png', 'Skibidi': 'SkibidiBase.png',
-    'Smurf Cat': 'SmurfCatBase.png', 'John Pork': 'JohnPorkBase.png', 'Headless Horseman': 'HeadlessHorsemanBase.png',
-    'Spyder': 'SpyderBase.png', '1 of 1': '1of1Base.png', 'Tralalero': 'TralaleroBase.png',
-    "SpyderSammy's Base": 'SpyderSammysBase.png'
+    'John Pork': 'JohnPorkBase.png', 'Headless Horseman': 'HeadlessHorsemanBase.png', 'Spyder': 'SpyderBase.png',
+    "SpyderSammy's Base": 'SpyderSammysBase.png', 'Tralalero': 'TralaleroBase.png', '1 of 1': '1of1Base.png'
   };
   return `https://stealabrainrot.fandom.com/wiki/Special:Redirect/file/${encodeURIComponent(fileNames[name] || `${name}Base.png`)}`;
 }
 
+// Current catalog checked against current 2026 base-skin listings: 38 total.
 const BASE_GROUPS = {
   classic: ['Default', 'Gold', 'Diamond', 'Rainbow'],
   mutation: ['Candy', 'Lava', 'Galaxy', 'Yin Yang', 'Radioactive', 'Cursed', 'Divine', 'Cyber', 'Phantom', 'Crystal'],
-  seasonal: ['Halloween', 'Aquatic', 'Christmas', 'Gingerbread', 'Taco', "Valentine's", 'Rose', 'Lucky', 'Easter', 'Summer', 'Pot of Gold', 'Red Octo'],
-  og: ['Strawberry', 'Meowl', 'Skibidi', 'Smurf Cat', 'John Pork', 'Headless Horseman', 'Spyder'],
+  seasonal: ['Halloween', 'Aquatic', 'Christmas', 'Gingerbread', 'Taco', "Valentine's", 'Rose', 'Lucky', 'Bunny Basket', 'Easter', 'Summer', 'Pot of Gold', 'Red Octo', 'Bee Emperor', 'Honey Bee'],
+  og: ['Strawberry', 'Meowl', 'Skibidi', 'John Pork', 'Headless Horseman', 'Spyder'],
   admin: ["SpyderSammy's Base", 'Tralalero', '1 of 1']
 };
 
@@ -152,13 +153,13 @@ async function createTicket(interaction, type, details = {}) {
   const titles = { middleman: '🤝 MIDDLEMAN REQUEST', support: '🛟 SUPPORT REQUEST', basepainting: '🎨 BASE PAINTING REQUEST' };
   const embed = new EmbedBuilder().setTitle(titles[type]).setColor(0x5865F2).addFields(
     { name: 'Requester', value: `<@${interaction.user.id}>`, inline: true },
-    { name: 'Service', value: type === 'basepainting' ? 'Base Painting' : type === 'Middleman' ? 'Middleman' : 'Support', inline: true }
+    { name: 'Service', value: type === 'basepainting' ? 'Base Painting' : type === 'middleman' ? 'Middleman' : 'Support', inline: true }
   );
 
   if (details.value) embed.addFields({ name: 'Trade Value', value: details.value, inline: true });
   if (details.valueImage) embed.setImage(details.valueImage);
   if (details.supportType) embed.addFields({ name: 'Support Type', value: details.supportType, inline: false });
-  if (details.base) { embed.addFields({ name: 'Base Requested', value: details.base, inline: true }).setImage(baseImage(details.base)); }
+  if (details.base) embed.addFields({ name: 'Base Requested', value: details.base, inline: true }).setImage(baseImage(details.base));
   if (details.roblox) embed.addFields({ name: 'Roblox Username', value: details.roblox, inline: true });
   if (details.other) embed.addFields({ name: 'Other Trader', value: details.other, inline: false });
   if (details.trade) embed.addFields({ name: 'Trade Details', value: details.trade, inline: false });
