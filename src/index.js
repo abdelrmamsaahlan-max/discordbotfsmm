@@ -203,6 +203,15 @@ async function ensureSetup(guild) {
     store.config.panelChannelId = panel.id;
     await panel.send({ embeds: [mainPanelEmbed()], components: panelRows() });
     await panel.send({ embeds: [panelEmbed()], components: middlemanRows() });
+  } else {
+    const messages = await panel.messages.fetch({ limit: 100 }).catch(() => null);
+    const botMessages = messages ? [...messages.values()].filter(m => m.author.id === client.user.id) : [];
+    const mainMessage = botMessages.find(m => m.embeds?.[0]?.footer?.text === 'FSMM • Steal a Brainrot Trading');
+    const mmMessage = botMessages.find(m => m.embeds?.[0]?.footer?.text === 'FSMM • Middleman Service');
+    if (mainMessage) await mainMessage.edit({ embeds: [mainPanelEmbed()], components: panelRows() }).catch(() => {});
+    else await panel.send({ embeds: [mainPanelEmbed()], components: panelRows() }).catch(() => {});
+    if (mmMessage) await mmMessage.edit({ embeds: [panelEmbed()], components: middlemanRows() }).catch(() => {});
+    else await panel.send({ embeds: [panelEmbed()], components: middlemanRows() }).catch(() => {});
   }
   store.config.vouchChannelId = VOUCH_CHANNEL_ID;
   saveStore();
@@ -264,7 +273,7 @@ async function createTicket(interaction, type, mmData = null) {
       { name: '💰 Trade Value', value: mmData.value, inline: true },
       { name: '👤 Other Person', value: mmData.otherUsername, inline: false },
       { name: '🔄 What Is The Trade?', value: mmData.trade, inline: false },
-      { name: '🎁 What Are You Tipping?', value: mmData.tip, inline: false }
+      { name: '🎁 What Are You Tipping?', value: mmData.tip || 'Not specified', inline: false }
     );
   }
 
@@ -287,16 +296,22 @@ async function createTicket(interaction, type, mmData = null) {
 }
 
 async function openMiddlemanModal(interaction, value) {
-  const modal = new ModalBuilder().setCustomId(`mm_modal:${value}`).setTitle(`Middleman • ${value}`);
+  const modal = new ModalBuilder().setCustomId(`mm_modal:${value}`).setTitle('Please answer the question below.');
   const other = new TextInputBuilder()
-    .setCustomId('other_username').setLabel('What is the other person username?')
-    .setStyle(TextInputStyle.Short).setPlaceholder('Enter their Discord username').setRequired(true).setMaxLength(100);
+    .setCustomId('other_username').setLabel('What is the other trader username?')
+    .setStyle(TextInputStyle.Paragraph)
+    .setPlaceholder("Example: The guy I'm trading with username is @user1")
+    .setRequired(true).setMaxLength(500);
   const trade = new TextInputBuilder()
     .setCustomId('trade').setLabel('What is the trade?')
-    .setStyle(TextInputStyle.Paragraph).setPlaceholder('Tell us exactly what each person is trading').setRequired(true).setMaxLength(1000);
+    .setStyle(TextInputStyle.Paragraph)
+    .setPlaceholder("Example: I'm giving a meowl for his skibidi toilet")
+    .setRequired(true).setMaxLength(1000);
   const tip = new TextInputBuilder()
     .setCustomId('tip').setLabel('What are you tipping?')
-    .setStyle(TextInputStyle.Short).setPlaceholder('Example: 25M / 50M / 1 Brainrot').setRequired(true).setMaxLength(200);
+    .setStyle(TextInputStyle.Paragraph)
+    .setPlaceholder('Example: a lavadorito spinito')
+    .setRequired(false).setMaxLength(500);
   modal.addComponents(
     new ActionRowBuilder().addComponents(other),
     new ActionRowBuilder().addComponents(trade),
