@@ -1,10 +1,9 @@
 {
   "name": "fsmm-discord-bot",
-  "version": "1.0.0",
-  "description": "FSMM Discord community bot",
+  "version": "2.0.0",
+  "description": "FSMM Discord ticket bot",
   "main": "src/index.js",
   "scripts": {
-    "prestart": "node scripts/patch-panel-refresh.js",
     "start": "node src/index.js"
   },
   "engines": {
