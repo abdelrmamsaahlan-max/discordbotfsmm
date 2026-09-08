@@ -1,166 +1,98 @@
 require('dotenv').config();
-const {
-  Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder,
-  EmbedBuilder, PermissionFlagsBits, ActionRowBuilder,
-  StringSelectMenuBuilder, ButtonBuilder, ButtonStyle,
-  ChannelType, ModalBuilder, TextInputBuilder, TextInputStyle,
-  MessageFlags
-} = require('discord.js');
-
-const TOKEN = process.env.DISCORD_TOKEN;
-const CLIENT_ID = process.env.CLIENT_ID;
-const GUILD_ID = process.env.GUILD_ID;
-if (!TOKEN || !CLIENT_ID || !GUILD_ID) throw new Error('Missing DISCORD_TOKEN, CLIENT_ID, or GUILD_ID');
-
-const VERSION = '4.1.0';
-const STAFF = 'FSMM Staff';
-const MM = 'FSMM Middleman';
-const OWNER = 'Owner';
-const CATEGORY = '🎫 FSMM SERVICES';
-
-const commands = [
-  new SlashCommandBuilder().setName('ping').setDescription('Check the FSMM bot latency and status.'),
-  new SlashCommandBuilder().setName('help').setDescription('Show all FSMM bot commands.'),
-  new SlashCommandBuilder().setName('serverinfo').setDescription('Show useful information about this server.'),
-  new SlashCommandBuilder().setName('userinfo').setDescription('Show useful information about a server member.').addUserOption(o => o.setName('user').setDescription('Member to inspect').setRequired(false)),
-  new SlashCommandBuilder().setName('avatar').setDescription('Show a member avatar.').addUserOption(o => o.setName('user').setDescription('Member whose avatar you want').setRequired(false)),
-  new SlashCommandBuilder().setName('membercount').setDescription('Show the current server member count.'),
-  new SlashCommandBuilder().setName('botinfo').setDescription('Show FSMM bot information.'),
-  new SlashCommandBuilder().setName('setup').setDescription('Owner-only: create or repair the FSMM service panels.'),
-  new SlashCommandBuilder().setName('ticket').setDescription('Owner-only: rebuild the FSMM ticket service panels.')
-].map(c => c.toJSON());
-
-const mutationBases = ['Candy','Lava','Galaxy','Yin Yang','Radioactive','Cursed','Divine','Cyber','Phantom','Crystal'];
-const baseFiles = {
-  Candy:'CandyBase.png', Lava:'LavaBase.png', Galaxy:'GalaxyBase.png', 'Yin Yang':'YinYangBase.png',
-  Radioactive:'RadioactiveBase.png', Cursed:'CursedBase.png', Divine:'DivineBase.png', Cyber:'CyberBase.png',
-  Phantom:'PhantomBase.png', Crystal:'CrystalBase.png'
-};
-const baseEmojiAliases = {
-  'Yin Yang':['yinyang','yinyangbase','yinyangmutation','yinyangbaseemoji'],
-  Radioactive:['radioactive','radiation','radioactivebase'], Candy:['candy','candybase'], Lava:['lava','lavabase'],
-  Galaxy:['galaxy','galaxybase'], Cursed:['cursed','cursedbase'], Divine:['divine','divinebase'],
-  Cyber:['cyber','cyberbase'], Phantom:['phantom','phantombase'], Crystal:['crystal','crystalbase']
-};
-
-function normalize(value='') { return value.toLowerCase().replace(/[^a-z0-9]/g,''); }
-function isOwner(interaction) { return Boolean(interaction.member?.roles?.cache?.some(r => normalize(r.name) === normalize(OWNER))); }
-async function ownerOnly(interaction) {
-  if (isOwner(interaction)) return true;
-  await interaction.reply({content:'❌ This command is **Owner-only**. You need the **Owner** role to use it.',flags:MessageFlags.Ephemeral}).catch(()=>{});
-  return false;
+const fs=require('fs');
+const path=require('path');
+const crypto=require('crypto');
+const {Client,GatewayIntentBits,REST,Routes,SlashCommandBuilder,EmbedBuilder,PermissionFlagsBits,ActionRowBuilder,StringSelectMenuBuilder,ButtonBuilder,ButtonStyle,ChannelType,ModalBuilder,TextInputBuilder,TextInputStyle,MessageFlags}=require('discord.js');
+const TOKEN=process.env.DISCORD_TOKEN,CLIENT_ID=process.env.CLIENT_ID,GUILD_ID=process.env.GUILD_ID;
+if(!TOKEN||!CLIENT_ID||!GUILD_ID)throw new Error('Missing required environment variables.');
+const VERSION='5.0.0-secure',STAFF='FSMM Staff',MM='FSMM Middleman',OWNER='Owner',CATEGORY='🎫 FSMM SERVICES',VOUCH_CHANNEL_ID='1466095232281088185';
+const DATA_FILE=process.env.DATA_FILE||path.join(__dirname,'..','data','store.json'),RATE_WINDOW_MS=30000,RATE_MAX=8,rate=new Map();
+const mutationBases=['Candy','Lava','Galaxy','Yin Yang','Radioactive','Cursed','Divine','Cyber','Phantom','Crystal'];
+const baseFiles={Candy:'CandyBase.png',Lava:'LavaBase.png',Galaxy:'GalaxyBase.png','Yin Yang':'YinYangBase.png',Radioactive:'RadioactiveBase.png',Cursed:'CursedBase.png',Divine:'DivineBase.png',Cyber:'CyberBase.png',Phantom:'PhantomBase.png',Crystal:'CrystalBase.png'};
+const mmValues=[['10M - 250M','Middleman for trades from 10M to 250M'],['250M - 500M','Middleman for trades from 250M to 500M'],['500M - 1B','Middleman for trades from 500M to 1B'],['1B - 5B','Middleman for trades from 1B to 5B'],['5B+','Middleman for trades worth 5B+']];
+const commands=[
+ new SlashCommandBuilder().setName('ping').setDescription('Check FSMM bot status and latency.'),
+ new SlashCommandBuilder().setName('help').setDescription('Show FSMM bot commands.'),
+ new SlashCommandBuilder().setName('serverinfo').setDescription('Show server information.'),
+ new SlashCommandBuilder().setName('userinfo').setDescription('Show information about a server member.').addUserOption(o=>o.setName('user').setDescription('Member to inspect').setRequired(false)),
+ new SlashCommandBuilder().setName('avatar').setDescription('Show a member avatar.').addUserOption(o=>o.setName('user').setDescription('Member whose avatar you want').setRequired(false)),
+ new SlashCommandBuilder().setName('membercount').setDescription('Show the current member count.'),
+ new SlashCommandBuilder().setName('botinfo').setDescription('Show FSMM bot information and security status.'),
+ new SlashCommandBuilder().setName('profile').setDescription('View an FSMM member profile.').addUserOption(o=>o.setName('user').setDescription('Member to view').setRequired(false)),
+ new SlashCommandBuilder().setName('vouch').setDescription('Leave a vouch for another member.').addUserOption(o=>o.setName('user').setDescription('Member you are vouching').setRequired(true)).addIntegerOption(o=>o.setName('rating').setDescription('Rating from 1 to 5').setMinValue(1).setMaxValue(5).setRequired(true)).addStringOption(o=>o.setName('comment').setDescription('Short vouch comment').setMaxLength(500).setRequired(true)),
+ new SlashCommandBuilder().setName('warnings').setDescription('Owner-only: view a member warning count.').addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true)),
+ new SlashCommandBuilder().setName('warn').setDescription('Owner-only: warn a member.').addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true)).addStringOption(o=>o.setName('reason').setDescription('Reason').setMaxLength(300).setRequired(true)),
+ new SlashCommandBuilder().setName('setup').setDescription('Owner-only: create or repair all FSMM service panels.'),
+ new SlashCommandBuilder().setName('ticket').setDescription('Owner-only: rebuild all FSMM service panels.')
+].map(c=>c.toJSON());
+function normalize(v=''){return String(v).toLowerCase().replace(/[^a-z0-9]/g,'')}
+function clean(v,max=500){return String(v??'').replace(/[\u0000-\u001F\u007F]/g,' ').replace(/@everyone|@here/gi,'@ mention').trim().slice(0,max)}
+function safe(v,max=500){return clean(v,max).replace(/\\/g,'\\\\').replace(/([*_`~|>])/g,'\\$1')||'Not provided'}
+function isOwner(i){return i.guild?.ownerId===i.user.id||Boolean(i.member?.roles?.cache?.some(r=>normalize(r.name)===normalize(OWNER)))}
+function isStaff(i){return isOwner(i)||Boolean(i.member?.roles?.cache?.some(r=>[normalize(STAFF),normalize(MM)].includes(normalize(r.name))))}
+async function ownerOnly(i){if(isOwner(i))return true;await i.reply({content:'❌ This action is **Owner-only**.',flags:MessageFlags.Ephemeral}).catch(()=>{});return false}
+function limited(i){const now=Date.now(),key=`${i.guildId}:${i.user.id}`,a=(rate.get(key)||[]).filter(t=>now-t<RATE_WINDOW_MS);if(a.length>=RATE_MAX){rate.set(key,a);return true}a.push(now);rate.set(key,a);return false}
+function embed(t,d){return new EmbedBuilder().setTitle(t).setDescription(d).setColor(0x5865f2).setFooter({text:`FSMM • v${VERSION}`})}
+function row(c){return new ActionRowBuilder().addComponents(c)}
+function closeButton(){return row(new ButtonBuilder().setCustomId('fsmm_close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger))}
+function baseImage(n){return `https://stealabrainrot.fandom.com/wiki/Special:Redirect/file/${encodeURIComponent(baseFiles[n]||n+'Base.png')}`}
+function defaultStore(){return {users:{},vouches:[],warnings:[],config:{}}}
+function validStore(x){return x&&typeof x==='object'&&x.users&&Array.isArray(x.vouches)&&Array.isArray(x.warnings)&&x.config&&typeof x.config==='object'}
+let store=defaultStore();
+function loadStore(){try{if(fs.existsSync(DATA_FILE)){const x=JSON.parse(fs.readFileSync(DATA_FILE,'utf8'));if(validStore(x))store=x}}catch(e){console.error('[FSMM] Store load failed:',e.message)}}
+function saveStore(){try{fs.mkdirSync(path.dirname(DATA_FILE),{recursive:true});const tmp=DATA_FILE+'.tmp';fs.writeFileSync(tmp,JSON.stringify(store,null,2),{encoding:'utf8',mode:0o600});fs.renameSync(tmp,DATA_FILE);fs.chmodSync(DATA_FILE,0o600)}catch(e){console.error('[FSMM] Store save failed:',e.message)}}
+function userProfile(id){if(!store.users[id])store.users[id]={vouches:0,ratingTotal:0};return store.users[id]}
+function mmMenu(){return row(new StringSelectMenuBuilder().setCustomId('mm_value').setPlaceholder('Select trade value...').addOptions(mmValues.map(([label,description])=>({label,value:label,description}))))}
+function supportMenu(){return row(new StringSelectMenuBuilder().setCustomId('support_type').setPlaceholder('Choose what you need...').addOptions({label:'Host a Giveaway',value:'host_gw',description:'Request FSMM to host a giveaway'},{label:'Claim a Giveaway',value:'claim_gw',description:'Get help claiming a giveaway'},{label:'Report',value:'report',description:'Report a problem or user to FSMM staff'},{label:'Apply for a Role',value:'role_apply',description:'Apply for an FSMM role'}))}
+function mutationMenu(){return row(new StringSelectMenuBuilder().setCustomId('mutation_pick').setPlaceholder('🎨 Select a mutation base...').addOptions(mutationBases.map(b=>({label:b,value:b,description:`${b} Base • mutation painting`}))))}
+async function getRoles(guild){const staff=guild.roles.cache.find(r=>normalize(r.name)===normalize(STAFF))||await guild.roles.create({name:STAFF,reason:'FSMM service system'});const mm=guild.roles.cache.find(r=>normalize(r.name)===normalize(MM))||await guild.roles.create({name:MM,reason:'FSMM middleman system'});const owner=guild.roles.cache.find(r=>normalize(r.name)===normalize(OWNER))||await guild.roles.create({name:OWNER,reason:'FSMM owner administration'});const cat=guild.channels.cache.find(c=>c.type===ChannelType.GuildCategory&&c.name===CATEGORY)||await guild.channels.create({name:CATEGORY,type:ChannelType.GuildCategory,reason:'FSMM service tickets'});return {staff,mm,owner,cat}}
+function cleanUsername(u){return u.username.toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,42)||'user'}
+async function createTicket(i,type,d={}){const {staff,mm,cat}=await getRoles(i.guild);const old=i.guild.channels.cache.find(c=>c.parentId===cat.id&&c.topic===`FSMM_OWNER:${i.user.id}`);if(old)return i.reply({content:`⚠️ You already have an open ticket: ${old}`,flags:MessageFlags.Ephemeral});const prefix=type==='middleman'?'mm':type==='support'?'support':'paint';const overwrites=[{id:i.guild.roles.everyone.id,deny:[PermissionFlagsBits.ViewChannel]},{id:i.user.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]},{id:staff.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]}];if(type==='middleman')overwrites.push({id:mm.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]});const ch=await i.guild.channels.create({name:`${prefix}-${cleanUsername(i.user)}`,type:ChannelType.GuildText,parent:cat.id,topic:`FSMM_OWNER:${i.user.id}`,permissionOverwrites:overwrites,reason:'FSMM private service ticket'});const titles={middleman:'🤝 MIDDLE MAN SERVICE',support:'🛟 FSMM SUPPORT',basepainting:'🎨 BASE PAINTING'};const e=embed(titles[type],type==='middleman'?'**Our middlemen help both traders complete a safe and fair trade.**\n\n> • Wait for a middleman to claim your ticket. Do **not** ping middlemen.\n> • Follow the middleman’s instructions carefully.\n> • Vouch the middleman in the **vouches** channel once the trade is complete.':'A private FSMM ticket has been opened. Please give staff the information they need and wait for assistance.');e.addFields({name:'Requester',value:`<@${i.user.id}>`,inline:true},{name:'Service',value:type==='basepainting'?'Base Painting':type[0].toUpperCase()+type.slice(1),inline:true});if(d.value)e.addFields({name:'💰 Trade Value',value:safe(d.value,50),inline:true});if(d.other)e.addFields({name:'👤 Other Trader',value:safe(d.other,100)});if(d.trade)e.addFields({name:'🔄 What Is The Trade?',value:safe(d.trade,900)});if(d.tip)e.addFields({name:'🎁 What Are You Tipping?',value:safe(d.tip,300)});if(d.supportType)e.addFields({name:'📌 Request Type',value:safe(d.supportType,100),inline:true});if(d.notes)e.addFields({name:'📝 Details',value:safe(d.notes,900)});if(d.roblox)e.addFields({name:'🎮 Roblox Username',value:safe(d.roblox,100),inline:true});if(d.base){e.addFields({name:'🎨 Base Requested',value:safe(d.base,50),inline:true});e.setImage(baseImage(d.base))}const roleId=type==='middleman'?mm.id:staff.id;await ch.send({content:`<@${i.user.id}> <@&${roleId}>`,embeds:[e],components:[closeButton()],allowedMentions:{users:[i.user.id],roles:[roleId]}});return i.reply({content:`✅ Ticket created: ${ch}`,flags:MessageFlags.Ephemeral})}
+function mmModal(value){const m=new ModalBuilder().setCustomId(`mm_modal:${encodeURIComponent(value)}`).setTitle('Please answer the questions below.');const a=new TextInputBuilder().setCustomId('other').setLabel('What is the other trader username?').setPlaceholder('Example: @user1').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100);const b=new TextInputBuilder().setCustomId('trade').setLabel('What is the trade?').setPlaceholder('Example: I am giving X for Y').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(900);const c=new TextInputBuilder().setCustomId('tip').setLabel('What are you tipping?').setPlaceholder('Example: a small tip (optional)').setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(300);return m.addComponents(row(a),row(b),row(c))}
+function supportModal(kind){const m=new ModalBuilder().setCustomId(`support_modal:${kind}`).setTitle('FSMM Support Request');const a=new TextInputBuilder().setCustomId('notes').setLabel('Tell us what you need').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(900);const b=new TextInputBuilder().setCustomId('roblox').setLabel('Roblox username (optional)').setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(100);return m.addComponents(row(a),row(b))}
+function paintModal(base){const m=new ModalBuilder().setCustomId(`paint_modal:${encodeURIComponent(base)}`).setTitle(`${base} Base Painting`);const a=new TextInputBuilder().setCustomId('roblox').setLabel('Roblox username').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100);const b=new TextInputBuilder().setCustomId('notes').setLabel('Extra details (optional)').setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(900);return m.addComponents(row(a),row(b))}
+function paintPreviewButtons(base){return row(new ButtonBuilder().setCustomId(`paint_start:${encodeURIComponent(base)}`).setLabel('Start Base Painting Ticket').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('paint_cancel').setLabel('Cancel Preview').setStyle(ButtonStyle.Secondary))}
+function panelConfigs(){return [['🤝・middleman',embed('🤝 FSMM MIDDLEMAN','Need a safe middleman?\n\nSelect your trade value below. After selecting, you will fill out a short request form and a private ticket will be created.'),mmMenu()],['🛟・support',embed('🛟 FSMM SUPPORT','Need help from FSMM staff?\n\nChoose exactly what you need: host a giveaway, claim a giveaway, report something, or apply for a role.'),supportMenu()],['🎨・base-painting',embed('🎨 FSMM BASE PAINTING','Want your base painted?\n\nSelect the mutation base you want, preview it privately, then start your request.'),mutationMenu()]]}
+async function upsertPanel(channel,e,components){const messages=await channel.messages.fetch({limit:25}).catch(()=>null);const panel=messages?.find(m=>m.author.id===client.user.id&&m.components.length>0);if(panel)return panel.edit({embeds:[e],components:[components],allowedMentions:{parse:[]}});return channel.send({embeds:[e],components:[components],allowedMentions:{parse:[]}})}
+async function setup(guild){const {cat}=await getRoles(guild);const oldNames=['🎫・ticket-center','ticket-center','fsmm-ticket-panel','🎫・tickets','🎟️・tickets'];for(const c of guild.channels.cache.filter(x=>x.type===ChannelType.GuildText&&oldNames.includes(x.name)).values())await c.delete('FSMM removed legacy ticket center').catch(()=>{});for(const c of guild.channels.cache.filter(x=>x.type===ChannelType.GuildText&&/trade.*ticket|ticket.*trade/i.test(x.name)).values())await c.delete('FSMM removed legacy trade ticket system').catch(()=>{});for(const [name,e,component] of panelConfigs()){let ch=guild.channels.cache.find(c=>c.type===ChannelType.GuildText&&c.name===name&&c.parentId===cat.id);if(!ch)ch=await guild.channels.create({name,type:ChannelType.GuildText,parent:cat.id,permissionOverwrites:[{id:guild.roles.everyone.id,allow:[PermissionFlagsBits.ViewChannel],deny:[PermissionFlagsBits.SendMessages]}],reason:'FSMM service panel'});await upsertPanel(ch,e,component)}store.config.panelReadyAt=new Date().toISOString();saveStore()}
+function profileEmbed(user){const p=userProfile(user.id),count=p.vouches||0,avg=count?((p.ratingTotal||0)/count).toFixed(2):'0.00';return embed(`👤 ${clean(user.username,80)} — FSMM Profile`,`**Member:** <@${user.id}>\n**Vouches:** ${count}\n**Average Rating:** ⭐ ${avg}/5\n\n**FSMM:** Community profile based on recorded vouches.`)}
+function helpEmbed(){return embed('🤖 FSMM BOT COMMANDS','**Everyone**\n`/ping` • `/help` • `/serverinfo` • `/userinfo` • `/avatar` • `/membercount` • `/botinfo` • `/profile` • `/vouch`\n\n**Owner only**\n`/warnings` • `/warn` • `/setup` • `/ticket`')}
+function auditLog(guild,title,details){const id=store.config.logChannelId;if(!id)return;const ch=guild.channels.cache.get(id);if(ch)ch.send({embeds:[embed(`🔐 ${title}`,details)],allowedMentions:{parse:[]}}).catch(()=>{})}
+async function ensureLogChannel(guild){const existing=store.config.logChannelId&&guild.channels.cache.get(store.config.logChannelId);if(existing)return existing;const ch=await guild.channels.create({name:'🔐・fsmm-logs',type:ChannelType.GuildText,permissionOverwrites:[{id:guild.roles.everyone.id,deny:[PermissionFlagsBits.ViewChannel]}],reason:'FSMM security audit logs'});store.config.logChannelId=ch.id;saveStore();return ch}
+const client=new Client({intents:[GatewayIntentBits.Guilds]});
+client.once('ready',async()=>{console.log(`[FSMM ${VERSION}] ONLINE`);try{const rest=new REST({version:'10'}).setToken(TOKEN);await rest.put(Routes.applicationGuildCommands(CLIENT_ID,GUILD_ID),{body:commands});const guild=client.guilds.cache.get(GUILD_ID);if(!guild)return console.error('[FSMM] Configured guild not found.');console.log(`[FSMM ${VERSION}] COMMANDS REGISTERED`);console.log('[FSMM] Security: env secrets, rate limits, sanitized inputs, private ticket ACLs, authorization, no privileged intents, no HTTP/API surface.')}catch(e){console.error('[FSMM] READY ERROR:',e.message)}});
+client.on('interactionCreate',async i=>{try{if(limited(i))return i.reply({content:'⏳ Too many requests. Please wait a little and try again.',flags:MessageFlags.Ephemeral}).catch(()=>{});
+if(i.isChatInputCommand()){
+ if(i.commandName==='ping'){const s=await i.reply({content:'🏓 Checking...',fetchReply:true,flags:MessageFlags.Ephemeral});return s.edit({content:`🏓 Pong! API latency: **${Math.max(0,Date.now()-s.createdTimestamp)}ms**`})}
+ if(i.commandName==='help')return i.reply({embeds:[helpEmbed()],flags:MessageFlags.Ephemeral});
+ if(i.commandName==='membercount')return i.reply({content:`👥 **${i.guild.memberCount}** members.`,flags:MessageFlags.Ephemeral});
+ if(i.commandName==='serverinfo')return i.reply({embeds:[embed(`🏠 ${clean(i.guild.name,100)}`,`**Owner:** <@${i.guild.ownerId}>\n**Members:** ${i.guild.memberCount}\n**Channels:** ${i.guild.channels.cache.size}\n**Roles:** ${i.guild.roles.cache.size}`)],flags:MessageFlags.Ephemeral});
+ if(i.commandName==='userinfo'){const u=i.options.getUser('user')||i.user;return i.reply({embeds:[embed(`👤 ${clean(u.username,80)}`,`**ID:** \`${u.id}\`\n**Bot:** ${u.bot?'Yes':'No'}\n**Created:** <t:${Math.floor(u.createdTimestamp/1000)}:R>`).setThumbnail(u.displayAvatarURL({size:256}))],flags:MessageFlags.Ephemeral})}
+ if(i.commandName==='avatar'){const u=i.options.getUser('user')||i.user;return i.reply({embeds:[embed(`🖼️ ${clean(u.username,80)} Avatar`,u.displayAvatarURL({size:1024}))],flags:MessageFlags.Ephemeral})}
+ if(i.commandName==='botinfo')return i.reply({embeds:[embed('🛡️ FSMM BOT SECURITY STATUS','**Secrets:** Environment variables only\n**Rate limiting:** Enabled\n**Input sanitization:** Enabled\n**Ticket ACLs:** Private by default\n**Authorization:** Owner / Staff / Middleman\n**Privileged intents:** Disabled\n**HTTP/API surface:** None\n**Persistent data:** Validated JSON + atomic writes\n**Passwords:** Not collected or stored')],flags:MessageFlags.Ephemeral});
+ if(i.commandName==='profile'){const u=i.options.getUser('user')||i.user;return i.reply({embeds:[profileEmbed(u)]})}
+ if(i.commandName==='vouch'){const target=i.options.getUser('user'),rating=i.options.getInteger('rating'),comment=clean(i.options.getString('comment'),500);if(target.id===i.user.id)return i.reply({content:'❌ You cannot vouch yourself.',flags:MessageFlags.Ephemeral});if(target.bot)return i.reply({content:'❌ You cannot vouch a bot.',flags:MessageFlags.Ephemeral});if(store.vouches.find(v=>v.from===i.user.id&&v.to===target.id&&Date.now()-v.at<86400000))return i.reply({content:'⚠️ You already vouched this member recently.',flags:MessageFlags.Ephemeral});store.vouches.push({id:crypto.randomBytes(8).toString('hex'),from:i.user.id,to:target.id,rating,comment,at:Date.now()});const p=userProfile(target.id);p.vouches++;p.ratingTotal+=rating;saveStore();const ch=i.guild.channels.cache.get(VOUCH_CHANNEL_ID)||await i.guild.channels.fetch(VOUCH_CHANNEL_ID).catch(()=>null);if(ch)await ch.send({embeds:[embed('⭐ NEW FSMM VOUCH',`**Vouched User:** <@${target.id}>\n**Vouched By:** <@${i.user.id}>\n**Rating:** ${'⭐'.repeat(rating)}\n**Comment:** ${safe(comment,500)}`)],allowedMentions:{users:[target.id,i.user.id]}});auditLog(i.guild,'Vouch Recorded',`<@${i.user.id}> vouched <@${target.id}> (${rating}/5).`);return i.reply({content:`✅ Vouch recorded for ${target}.`,flags:MessageFlags.Ephemeral})}
+ if(i.commandName==='warnings'){if(!await ownerOnly(i))return;const u=i.options.getUser('user');return i.reply({content:`⚠️ **${clean(u.username,80)}** has **${store.warnings.filter(w=>w.userId===u.id).length}** warning(s).`,flags:MessageFlags.Ephemeral})}
+ if(i.commandName==='warn'){if(!await ownerOnly(i))return;const u=i.options.getUser('user'),reason=clean(i.options.getString('reason'),300);store.warnings.push({userId:u.id,by:i.user.id,reason,at:Date.now()});saveStore();auditLog(i.guild,'Warning Issued',`<@${u.id}> was warned by <@${i.user.id}>.\n**Reason:** ${safe(reason,300)}`);return i.reply({content:`⚠️ Warning added to ${u}.`,flags:MessageFlags.Ephemeral})}
+ if(i.commandName==='setup'||i.commandName==='ticket'){if(!await ownerOnly(i))return;await setup(i.guild);await ensureLogChannel(i.guild);return i.reply({content:'✅ FSMM secure panels repaired and refreshed. Existing bot panel messages were updated.',flags:MessageFlags.Ephemeral})}
 }
-function baseImage(name) { return `https://stealabrainrot.fandom.com/wiki/Special:Redirect/file/${encodeURIComponent(baseFiles[name] || name+'Base.png')}`; }
-function findBaseEmoji(guild, base) {
-  const aliases = (baseEmojiAliases[base] || [base]).map(normalize);
-  const emoji = guild.emojis.cache.find(e => {
-    const n = normalize(e.name);
-    return aliases.some(a => n === a || n.includes(a) || a.includes(n));
-  });
-  return emoji ? {id:emoji.id,name:emoji.name,animated:emoji.animated} : undefined;
+if(i.isStringSelectMenu()){
+ if(i.customId==='mm_value')return i.showModal(mmModal(i.values[0]));
+ if(i.customId==='support_type')return i.showModal(supportModal(i.values[0]));
+ if(i.customId==='mutation_pick'){const base=i.values[0];return i.reply({embeds:[embed(`🎨 ${base} Base`,'This private preview shows the selected mutation base.\n\nPress **Start Base Painting Ticket** when ready.').setImage(baseImage(base))],components:[paintPreviewButtons(base)],flags:MessageFlags.Ephemeral})}
 }
-function missingBaseEmojis(guild) { return mutationBases.filter(base => !findBaseEmoji(guild,base)); }
-
-const valueImages = {
-  '10M - 250M':'https://static.u7buy.com/2026/03/05/13f59a8a77664b9ba7c3881370a3dbb9.png',
-  '250M - 500M':'https://i.ebayimg.com/images/g/3-0AAeSw23NpZcT0/s-l1200.png',
-  '1B+':'https://i.ebayimg.com/images/g/3-0AAeSw23NpZcT0/s-l1200.png',
-  OG:'https://www.eldorado.gg/blog/wp-content/uploads/2025/12/Meowl.webp'
-};
-
-const client = new Client({intents:[GatewayIntentBits.Guilds]});
-const row = component => new ActionRowBuilder().addComponents(component);
-function closeButton() { return row(new ButtonBuilder().setCustomId('fsmm_close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger)); }
-function embed(title,description) { return new EmbedBuilder().setTitle(title).setDescription(description).setColor(0x5865f2).setFooter({text:`FSMM • v${VERSION}`}); }
-function mmMenu() { return row(new StringSelectMenuBuilder().setCustomId('mm_value').setPlaceholder('Select trade value...').addOptions(
-  {label:'10M - 250M',value:'10M - 250M',description:'Middleman for trades from 10M to 250M'},
-  {label:'250M - 500M',value:'250M - 500M',description:'Middleman for trades from 250M to 500M'},
-  {label:'1B+',value:'1B+',description:'Middleman for trades worth 1B+'},
-  {label:'OG',value:'OG',description:'Middleman for OG trades'})); }
-function supportMenu() { return row(new StringSelectMenuBuilder().setCustomId('support_type').setPlaceholder('Choose what you need...').addOptions(
-  {label:'Host a Giveaway',value:'host_gw',description:'Request FSMM to host a giveaway'},
-  {label:'Claim a Giveaway',value:'claim_gw',description:'Get help claiming a giveaway'},
-  {label:'Report',value:'report',description:'Report a problem or user to FSMM staff'},
-  {label:'Apply for a Role',value:'role_apply',description:'Apply for an FSMM staff or service role'})); }
-function mutationMenu(guild) { return row(new StringSelectMenuBuilder().setCustomId('mutation_pick').setPlaceholder('🎨 Select a mutation base...').addOptions(
-  mutationBases.map(base => ({label:base,value:base,description:`${base} Base • mutation painting`,emoji:findBaseEmoji(guild,base)})))); }
-
-async function getRoles(guild) {
-  const staff = guild.roles.cache.find(r=>normalize(r.name)===normalize(STAFF)) || await guild.roles.create({name:STAFF,reason:'FSMM service ticket system'});
-  const mm = guild.roles.cache.find(r=>normalize(r.name)===normalize(MM)) || await guild.roles.create({name:MM,reason:'FSMM middleman system'});
-  const cat = guild.channels.cache.find(c=>c.type===ChannelType.GuildCategory && c.name===CATEGORY) || await guild.channels.create({name:CATEGORY,type:ChannelType.GuildCategory,reason:'FSMM service panels'});
-  return {staff,mm,cat};
+if(i.isModalSubmit()){
+ if(i.customId.startsWith('mm_modal:')){const value=decodeURIComponent(i.customId.split(':')[1]);return createTicket(i,'middleman',{value,other:clean(i.fields.getTextInputValue('other'),100),trade:clean(i.fields.getTextInputValue('trade'),900),tip:clean(i.fields.getTextInputValue('tip'),300)})}
+ if(i.customId.startsWith('support_modal:')){const kind=i.customId.split(':')[1],labels={host_gw:'Host a Giveaway',claim_gw:'Claim a Giveaway',report:'Report',role_apply:'Apply for a Role'};return createTicket(i,'support',{supportType:labels[kind]||kind,notes:clean(i.fields.getTextInputValue('notes'),900),roblox:clean(i.fields.getTextInputValue('roblox'),100)})}
+ if(i.customId.startsWith('paint_modal:')){const base=decodeURIComponent(i.customId.split(':')[1]);return createTicket(i,'basepainting',{base,roblox:clean(i.fields.getTextInputValue('roblox'),100),notes:clean(i.fields.getTextInputValue('notes'),900)})}
 }
-function cleanUsername(user) { return user.username.toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,45) || 'user'; }
-
-async function createTicket(interaction,type,d={}) {
-  const {staff,mm,cat}=await getRoles(interaction.guild);
-  const old=interaction.guild.channels.cache.find(c=>c.parentId===cat.id && c.topic===`FSMM_OWNER:${interaction.user.id}`);
-  if(old) return interaction.reply({content:`⚠️ You already have an open ticket: ${old}`,flags:MessageFlags.Ephemeral});
-  const prefix=type==='middleman'?'mm':type==='support'?'support':'paint';
-  const name=`${prefix}-${cleanUsername(interaction.user)}`;
-  const overwrites=[
-    {id:interaction.guild.roles.everyone.id,deny:[PermissionFlagsBits.ViewChannel]},
-    {id:interaction.user.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]},
-    {id:staff.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]}
-  ];
-  if(type==='middleman') overwrites.push({id:mm.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]});
-  const ch=await interaction.guild.channels.create({name,type:ChannelType.GuildText,parent:cat.id,topic:`FSMM_OWNER:${interaction.user.id}`,permissionOverwrites:overwrites});
-  const titles={middleman:'🤝 MIDDLEMAN REQUEST',support:'🛟 SUPPORT REQUEST',basepainting:'🎨 BASE PAINTING REQUEST'};
-  const e=embed(titles[type],'A private FSMM ticket has been opened. A staff member will help you here.');
-  e.addFields({name:'Requester',value:`<@${interaction.user.id}>`,inline:true},{name:'Service',value:type==='basepainting'?'Base Painting':type[0].toUpperCase()+type.slice(1),inline:true});
-  if(d.value)e.addFields({name:'Trade Value',value:d.value,inline:true}); if(d.other)e.addFields({name:'Other Trader',value:d.other}); if(d.trade)e.addFields({name:'Trade Details',value:d.trade}); if(d.tip)e.addFields({name:'Tip',value:d.tip}); if(d.supportType)e.addFields({name:'Request Type',value:d.supportType}); if(d.notes)e.addFields({name:'Details',value:d.notes}); if(d.roblox)e.addFields({name:'Roblox Username',value:d.roblox,inline:true});
-  if(d.base){e.addFields({name:'Base Requested',value:d.base,inline:true});e.setImage(baseImage(d.base));}
-  if(d.value && valueImages[d.value]) e.setThumbnail(valueImages[d.value]);
-  const ping=type==='middleman'?`<@${interaction.user.id}> <@&${mm.id}>`:`<@${interaction.user.id}> <@&${staff.id}>`;
-  await ch.send({content:ping,embeds:[e],components:[closeButton()]});
-  return interaction.reply({content:`✅ Ticket created: ${ch}`,flags:MessageFlags.Ephemeral});
+if(i.isButton()){
+ if(i.customId==='fsmm_close'){if(!isStaff(i))return i.reply({content:'❌ Only FSMM staff can close tickets.',flags:MessageFlags.Ephemeral});await i.reply({content:'🔒 Ticket closed. This channel will be deleted in 5 seconds.',flags:MessageFlags.Ephemeral});auditLog(i.guild,'Ticket Closed',`Ticket <#${i.channelId}> closed by <@${i.user.id}>.`);setTimeout(()=>i.channel?.delete('FSMM ticket closed').catch(()=>{}),5000);return}
+ if(i.customId==='paint_cancel')return i.update({content:'❌ Base painting preview cancelled.',embeds:[],components:[]});
+ if(i.customId.startsWith('paint_start:'))return i.showModal(paintModal(decodeURIComponent(i.customId.split(':')[1])));
 }
-
-function mmModal(value){const m=new ModalBuilder().setCustomId(`mm_modal:${encodeURIComponent(value)}`).setTitle('FSMM Middleman');const a=new TextInputBuilder().setCustomId('other').setLabel('Other trader username').setStyle(TextInputStyle.Short).setRequired(true);const b=new TextInputBuilder().setCustomId('trade').setLabel('What are you trading?').setStyle(TextInputStyle.Paragraph).setRequired(true);const c=new TextInputBuilder().setCustomId('tip').setLabel('Tip (optional)').setStyle(TextInputStyle.Short).setRequired(false);return m.addComponents(row(a),row(b),row(c));}
-function supportModal(kind){const m=new ModalBuilder().setCustomId(`support_modal:${kind}`).setTitle('FSMM Support');const a=new TextInputBuilder().setCustomId('notes').setLabel('Tell us what you need').setStyle(TextInputStyle.Paragraph).setRequired(true);const b=new TextInputBuilder().setCustomId('roblox').setLabel('Roblox username (optional)').setStyle(TextInputStyle.Short).setRequired(false);return m.addComponents(row(a),row(b));}
-function paintPreview(base,guild){const emoji=findBaseEmoji(guild,base);const e=embed(`🎨 ${base} Base`,'You selected this mutation base.\n\nThis preview is only visible to you.');e.setImage(baseImage(base));if(emoji)e.setFooter({text:`FSMM • ${emoji.name} • Mutation Base`});return e;}
-function paintModal(base){const m=new ModalBuilder().setCustomId(`paint_modal:${encodeURIComponent(base)}`).setTitle(`${base} Base Painting`);const a=new TextInputBuilder().setCustomId('roblox').setLabel('Roblox username').setStyle(TextInputStyle.Short).setRequired(true);const b=new TextInputBuilder().setCustomId('notes').setLabel('Extra details (optional)').setStyle(TextInputStyle.Paragraph).setRequired(false);return m.addComponents(row(a),row(b));}
-function paintPreviewButtons(base){return row(new ButtonBuilder().setCustomId(`paint_start:${encodeURIComponent(base)}`).setLabel('Start Base Painting Ticket').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('paint_cancel').setLabel('Cancel Preview').setStyle(ButtonStyle.Secondary));}
-function panelConfigs(guild){return [
-  ['🤝・middleman',embed('🤝 FSMM MIDDLEMAN','Need a safe middleman?\n\nSelect your trade value below. After selecting, you will fill out a short request form and a private ticket will be created.'),mmMenu()],
-  ['🛟・support',embed('🛟 FSMM SUPPORT','Need help from FSMM staff?\n\nChoose exactly what you need: host a giveaway, claim a giveaway, report something, or apply for a role.'),supportMenu()],
-  ['🎨・base-painting',embed('🎨 FSMM BASE PAINTING','Want your base painted?\n\nOnly mutation bases are available here. Select the mutation base you want, preview it privately, then start your request.'),mutationMenu(guild)]
-];}
-async function upsertPanel(channel,e,components){const messages=await channel.messages.fetch({limit:20}).catch(()=>null);const panel=messages?.find(m=>m.author.id===client.user.id && m.components.length>0);if(panel)return panel.edit({embeds:[e],components:[components]});return channel.send({embeds:[e],components:[components]});}
-async function setup(guild){const {cat}=await getRoles(guild);const oldNames=['🎫・ticket-center','ticket-center','fsmm-ticket-panel','🎫・tickets','🎟️・tickets'];for(const c of guild.channels.cache.filter(x=>x.type===ChannelType.GuildText&&oldNames.includes(x.name)).values())await c.delete('FSMM removed legacy ticket center').catch(()=>{});for(const c of guild.channels.cache.filter(x=>x.type===ChannelType.GuildText&&/trade.*ticket|ticket.*trade/i.test(x.name)).values())await c.delete('FSMM removed legacy trade ticket system').catch(()=>{});for(const [name,e,component] of panelConfigs(guild)){let channel=guild.channels.cache.find(c=>c.type===ChannelType.GuildText&&c.name===name&&c.parentId===cat.id);if(!channel)channel=await guild.channels.create({name,type:ChannelType.GuildText,parent:cat.id,permissionOverwrites:[{id:guild.roles.everyone.id,allow:[PermissionFlagsBits.ViewChannel],deny:[PermissionFlagsBits.SendMessages]}],reason:'FSMM service panel'});await upsertPanel(channel,e,component);}}
-function helpEmbed(){return embed('🤖 FSMM BOT COMMANDS',['**Everyone:**','`/ping` — Check bot status and latency.','`/help` — Show this command list.','`/serverinfo` — Server information.','`/userinfo` — Member information.','`/avatar` — Show a member avatar.','`/membercount` — Current member count.','`/botinfo` — Bot version and uptime.','','**Owner only:**','`/setup` — Repair/create the FSMM panels.','`/ticket` — Rebuild the FSMM ticket panels.'].join('\n'));}
-
-client.once('ready',async()=>{console.log(`[FSMM ${VERSION}] ONLINE AS ${client.user.tag}`);try{const rest=new REST({version:'10'}).setToken(TOKEN);await rest.put(Routes.applicationGuildCommands(CLIENT_ID,GUILD_ID),{body:commands});console.log(`[FSMM ${VERSION}] COMMANDS REGISTERED: /ping /help /serverinfo /userinfo /avatar /membercount /botinfo /setup /ticket`);const guild=client.guilds.cache.get(GUILD_ID);if(!guild)return console.error(`[FSMM ${VERSION}] GUILD NOT FOUND`);const missing=missingBaseEmojis(guild);if(missing.length)console.warn(`[FSMM ${VERSION}] MISSING BASE EMOJIS: ${missing.join(', ')}`);else console.log(`[FSMM ${VERSION}] ALL BASE EMOJIS FOUND`);console.log(`[FSMM ${VERSION}] STARTUP COMPLETE — panels are NOT auto-recreated. Use /setup only when the Owner needs to repair panels.`);}catch(error){console.error(`[FSMM ${VERSION}] READY ERROR`,error);}});
-
-client.on('interactionCreate',async i=>{try{
-  if(i.isChatInputCommand()){
-    if(i.commandName==='ping'){const sent=await i.reply({content:'🏓 Checking...',fetchReply:true,flags:MessageFlags.Ephemeral});const latency=sent.createdTimestamp-i.createdTimestamp;return i.editReply(`🏓 **Pong!**\nBot latency: **${latency}ms**\nAPI latency: **${client.ws.ping}ms**\nStatus: 🟢 Online`);}
-    if(i.commandName==='help')return i.reply({embeds:[helpEmbed()],flags:MessageFlags.Ephemeral});
-    if(i.commandName==='serverinfo'){const g=i.guild;const e=embed(`🏠 ${g.name}`,'Server information');const icon=g.iconURL({size:256});if(icon)e.setThumbnail(icon);e.addFields({name:'Owner',value:`<@${g.ownerId}>`,inline:true},{name:'Members',value:String(g.memberCount),inline:true},{name:'Channels',value:String(g.channels.cache.size),inline:true},{name:'Roles',value:String(g.roles.cache.size),inline:true},{name:'Boosts',value:String(g.premiumSubscriptionCount||0),inline:true},{name:'Created',value:`<t:${Math.floor(g.createdTimestamp/1000)}:D>`,inline:true});return i.reply({embeds:[e],flags:MessageFlags.Ephemeral});}
-    if(i.commandName==='userinfo'){const user=i.options.getUser('user')||i.user;const member=await i.guild.members.fetch(user.id).catch(()=>null);const e=embed(`👤 ${user.username}`,'Member information');e.setThumbnail(user.displayAvatarURL({size:512}));e.addFields({name:'ID',value:user.id,inline:true},{name:'Account Created',value:`<t:${Math.floor(user.createdTimestamp/1000)}:D>`,inline:true},{name:'Joined Server',value:member?.joinedTimestamp?`<t:${Math.floor(member.joinedTimestamp/1000)}:D>`:'Unknown',inline:true});return i.reply({embeds:[e],flags:MessageFlags.Ephemeral});}
-    if(i.commandName==='avatar'){const user=i.options.getUser('user')||i.user;const e=embed(`🖼️ ${user.username}'s Avatar`,'Full-size avatar');e.setImage(user.displayAvatarURL({size:1024,dynamic:true}));return i.reply({embeds:[e],flags:MessageFlags.Ephemeral});}
-    if(i.commandName==='membercount')return i.reply({content:`👥 **${i.guild.memberCount}** members are currently in **${i.guild.name}**.`,flags:MessageFlags.Ephemeral});
-    if(i.commandName==='botinfo'){const uptime=Math.floor((Date.now()-client.readyTimestamp)/1000);const d=Math.floor(uptime/86400),h=Math.floor(uptime%86400/3600),m=Math.floor(uptime%3600/60),s=uptime%60;const e=embed('🤖 FSMM BOT INFO','Reliable FSMM utility + service ticket bot.');e.addFields({name:'Version',value:VERSION,inline:true},{name:'Uptime',value:`${d}d ${h}h ${m}m ${s}s`,inline:true},{name:'API Latency',value:`${client.ws.ping}ms`,inline:true});return i.reply({embeds:[e],flags:MessageFlags.Ephemeral});}
-    if(i.commandName==='setup'||i.commandName==='ticket'){if(!(await ownerOnly(i)))return;await i.deferReply({flags:MessageFlags.Ephemeral});await setup(i.guild);return i.editReply('✅ **FSMM panels verified successfully.**');}
-  }
-  if(i.isStringSelectMenu()){
-    if(i.customId==='mm_value')return i.showModal(mmModal(i.values[0]));
-    if(i.customId==='support_type')return i.showModal(supportModal(i.values[0]));
-    if(i.customId==='mutation_pick'){const base=i.values[0];return i.reply({content:`🎨 **${base} Base** selected. This preview is only visible to you.`,embeds:[paintPreview(base,i.guild)],components:[paintPreviewButtons(base)],flags:MessageFlags.Ephemeral});}
-  }
-  if(i.isButton()){
-    if(i.customId==='paint_cancel')return i.update({content:'✅ Preview cancelled. Nothing was changed.',embeds:[],components:[]});
-    if(i.customId.startsWith('paint_start:')){const base=decodeURIComponent(i.customId.slice('paint_start:'.length));return i.showModal(paintModal(base));}
-    if(i.customId==='fsmm_close'){const canClose=i.memberPermissions?.has(PermissionFlagsBits.ManageChannels)||i.member?.roles?.cache?.some(r=>normalize(r.name)===normalize(STAFF));if(!canClose)return i.reply({content:'❌ Only FSMM Staff or members with Manage Channels can close tickets.',flags:MessageFlags.Ephemeral});await i.reply({content:'🔒 Closing ticket...',flags:MessageFlags.Ephemeral});setTimeout(()=>i.channel.delete('FSMM ticket closed').catch(()=>{}),1000);return;}
-  }
-  if(i.isModalSubmit()){
-    if(i.customId.startsWith('mm_modal:')){const value=decodeURIComponent(i.customId.slice('mm_modal:'.length));return createTicket(i,'middleman',{value,other:i.fields.getTextInputValue('other'),trade:i.fields.getTextInputValue('trade'),tip:i.fields.getTextInputValue('tip')});}
-    if(i.customId.startsWith('support_modal:')){const kind=i.customId.slice('support_modal:'.length);const labels={host_gw:'Host a Giveaway',claim_gw:'Claim a Giveaway',report:'Report',role_apply:'Apply for a Role'};return createTicket(i,'support',{supportType:labels[kind]||kind,notes:i.fields.getTextInputValue('notes'),roblox:i.fields.getTextInputValue('roblox')});}
-    if(i.customId.startsWith('paint_modal:')){const base=decodeURIComponent(i.customId.slice('paint_modal:'.length));return createTicket(i,'basepainting',{base,roblox:i.fields.getTextInputValue('roblox'),notes:i.fields.getTextInputValue('notes')});}
-  }
-}catch(error){console.error(`[FSMM ${VERSION}] INTERACTION ERROR`,error);const msg={content:'❌ Something went wrong while processing that action. Please try again.',flags:MessageFlags.Ephemeral};if(i.replied||i.deferred)await i.followUp(msg).catch(()=>{});else await i.reply(msg).catch(()=>{});}});
-
-client.on('error',error=>console.error(`[FSMM ${VERSION}] CLIENT ERROR`,error));
-client.on('shardError',error=>console.error(`[FSMM ${VERSION}] SHARD ERROR`,error));
-client.login(TOKEN).catch(error=>{console.error(`[FSMM ${VERSION}] LOGIN FAILED`,error);process.exit(1);});
+}catch(e){console.error('[FSMM] Interaction error:',e.message);const msg={content:'❌ Something went wrong. Please try again or contact FSMM staff.',flags:MessageFlags.Ephemeral};if(i.replied||i.deferred)await i.followUp(msg).catch(()=>{});else await i.reply(msg).catch(()=>{})}});
+loadStore();
+process.on('unhandledRejection',e=>console.error('[FSMM] Unhandled rejection:',e?.message||e));
+process.on('uncaughtException',e=>console.error('[FSMM] Uncaught exception:',e?.message||e));
+client.login(TOKEN);
