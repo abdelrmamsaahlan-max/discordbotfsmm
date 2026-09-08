@@ -1,7 +1,7 @@
 {
   "name": "fsmm-discord-bot",
-  "version": "3.0.0",
-  "description": "FSMM Discord service ticket bot - clean rebuild",
+  "version": "5.0.0",
+  "description": "FSMM Discord service ticket bot with hardened security controls",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js"
@@ -10,7 +10,7 @@
     "node": ">=20"
   },
   "dependencies": {
-    "discord.js": "^14.22.1",
+    "discord.js": "^14.27.0",
     "dotenv": "^17.2.2"
   }
 }
