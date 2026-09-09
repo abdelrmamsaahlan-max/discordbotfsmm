@@ -1,15 +1,24 @@
-const { SlashCommandBuilder } = require('discord.js');
-
-module.exports = function setupGiveaways({ client, store, saveStore }) {
-  store.giveaways ||= [];
-  const command = new SlashCommandBuilder()
-    .setName('giveaway')
-    .setDescription('Create an FSMM giveaway.')
-    .toJSON();
-
-  client.on('ready', () => {
-    console.log('[FSMM] Giveaway system loaded.');
-  });
-
-  return command;
+const {REST,Routes,SlashCommandBuilder,EmbedBuilder,ActionRowBuilder,ButtonBuilder,ButtonStyle,ModalBuilder,TextInputBuilder,TextInputStyle,MessageFlags}=require('discord.js');
+const norm=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+const clean=(s,n=700)=>String(s||'').replace(/@everyone|@here/gi,'@ mention').trim().slice(0,n);
+module.exports=({client,store,saveStore,env})=>{
+ store.giveaways ||= []; const timers=new Map(), roles=['giveawayhost','giveawayholster'];
+ const command=new SlashCommandBuilder().setName('giveaway').setDescription('Create an FSMM giveaway.').toJSON();
+ const host=i=>Boolean(i.member?.roles?.cache?.some(r=>roles.includes(norm(r.name)))||i.guild?.ownerId===i.user.id);
+ const parse=v=>{const m=String(v).trim().toLowerCase().match(/^(\d+)\s*(m|h|d|w)$/);if(!m)return null;const x=Number(m[1])*({m:60000,h:3600000,d:86400000,w:604800000}[m[2]]);return x>=60000&&x<=31536000000?x:null};
+ const valid=v=>{try{const u=new URL(v);return ['http:','https:'].includes(u.protocol)}catch{return false}};
+ const buttons=id=>new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('gw:e:'+id).setLabel('Enter Giveaway').setEmoji('🎉').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('gw:l:'+id).setLabel('Leave').setEmoji('↩️').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId('gw:x:'+id).setLabel('End').setEmoji('⏹️').setStyle(ButtonStyle.Danger));
+ const live=g=>new EmbedBuilder().setTitle('🎉 FSMM GIVEAWAY').setDescription(`## 🎁 ${clean(g.item,180)}\n\n**Hosted by:** <@${g.host}>\n**Winners:** ${g.winners}\n**Entries:** ${g.people.length}\n**Ends:** <t:${Math.floor(g.end/1000)}:R>\n\n${clean(g.req||'No extra requirements.',650)}`).setImage(g.image).setColor(0x5865f2).setFooter({text:'FSMM • Giveaway System'});
+ const endEmbed=(g,w)=>new EmbedBuilder().setTitle('🏆 FSMM GIVEAWAY ENDED').setDescription(`## 🎁 ${clean(g.item,180)}\n\n**Winner${w.length===1?'':'s'}:** ${w.length?w.map(x=>`<@${x}>`).join(', '):'No valid entries.'}\n**Entries:** ${g.people.length}\n**Hosted by:** <@${g.host}>`).setImage(g.image).setColor(0x57f287).setFooter({text:'FSMM • Giveaway System'});
+ const pick=(a,n)=>{a=[...a];const o=[];while(a.length&&o.length<n)o.push(a.splice(Math.floor(Math.random()*a.length),1)[0]);return o};
+ async function finish(id){const g=store.giveaways.find(x=>x.id===id);if(!g||g.ended)return;g.ended=true;g.winnersPicked=pick(g.people,g.winners);saveStore();if(timers.has(id))clearTimeout(timers.get(id));try{const c=await client.channels.fetch(g.channel),m=await c.messages.fetch(g.message);await m.edit({embeds:[endEmbed(g,g.winnersPicked)],components:[]});if(g.winnersPicked.length)await c.send(`🎉 Congratulations ${g.winnersPicked.map(x=>`<@${x}>`).join(', ')}! You won **${clean(g.item,120)}**!`)}catch(e){console.error('[FSMM] giveaway end:',e.message)}}
+ const schedule=g=>timers.set(g.id,setTimeout(()=>finish(g.id),Math.max(1000,g.end-Date.now())));
+ const modal=()=>{const m=new ModalBuilder().setCustomId('gw:create').setTitle('Create FSMM Giveaway');const a=new TextInputBuilder().setCustomId('item').setLabel('Giveaway item name').setPlaceholder('Example: 1x1x1x').setStyle(TextInputStyle.Short).setRequired(true);const b=new TextInputBuilder().setCustomId('image').setLabel('Giveaway image URL').setPlaceholder('https://...').setStyle(TextInputStyle.Short).setRequired(true);const c=new TextInputBuilder().setCustomId('duration').setLabel('Duration: 30m / 2h / 1d').setPlaceholder('2h').setStyle(TextInputStyle.Short).setRequired(true);const d=new TextInputBuilder().setCustomId('winners').setLabel('Number of winners (1-20)').setPlaceholder('1').setStyle(TextInputStyle.Short).setRequired(true);const e=new TextInputBuilder().setCustomId('req').setLabel('Requirements / extra info').setPlaceholder('Optional').setStyle(TextInputStyle.Paragraph).setRequired(false);return m.addComponents(...[a,b,c,d,e].map(x=>new ActionRowBuilder().addComponents(x)))};
+ client.on('ready',async()=>{try{const r=new REST({version:'10'}).setToken(env.TOKEN),q=Routes.applicationGuildCommands(env.CLIENT_ID,env.GUILD_ID),all=await r.get(q),keep=all.filter(x=>x.name!=='giveaway');await r.put(q,{body:[...keep,command]});for(const g of store.giveaways)if(!g.ended&&g.message&&g.end>Date.now())schedule(g);else if(!g.ended)finish(g.id);console.log('[FSMM] Giveaway system loaded.')}catch(e){console.error('[FSMM] giveaway setup:',e.message)}});
+ client.on('interactionCreate',async i=>{try{
+  if(i.isChatInputCommand()&&i.commandName==='giveaway'){if(!host(i))return i.reply({content:'❌ You need the **Giveaway Host** role.',flags:MessageFlags.Ephemeral});return i.showModal(modal())}
+  if(i.isModalSubmit()&&i.customId==='gw:create'){if(!host(i))return i.reply({content:'❌ You no longer have the Giveaway Host role.',flags:MessageFlags.Ephemeral});const item=clean(i.fields.getTextInputValue('item'),180),image=clean(i.fields.getTextInputValue('image'),500),dur=parse(i.fields.getTextInputValue('duration')),w=Number(i.fields.getTextInputValue('winners')),req=clean(i.fields.getTextInputValue('req'),650);if(!valid(image))return i.reply({content:'❌ Enter a valid image URL.',flags:MessageFlags.Ephemeral});if(!dur)return i.reply({content:'❌ Duration must be like 30m, 2h, 1d or 1w.',flags:MessageFlags.Ephemeral});if(!Number.isInteger(w)||w<1||w>20)return i.reply({content:'❌ Winners must be between 1 and 20.',flags:MessageFlags.Ephemeral});const g={id:Math.random().toString(36).slice(2,12),channel:i.channelId,message:null,host:i.user.id,item,image,duration:dur,winners:w,req,people:[],end:Date.now()+dur,ended:false};store.giveaways.push(g);const m=await i.channel.send({embeds:[live(g)],components:[buttons(g.id)],allowedMentions:{parse:[]}});g.message=m.id;saveStore();schedule(g);return i.reply({content:`✅ Giveaway created for **${item}**.`,flags:MessageFlags.Ephemeral})}
+  if(i.isButton()&&i.customId.startsWith('gw:')){const [_,a,id]=i.customId.split(':'),g=store.giveaways.find(x=>x.id===id);if(!g||g.ended)return i.reply({content:'❌ This giveaway has ended.',flags:MessageFlags.Ephemeral});if(a==='e'){if(g.people.includes(i.user.id))return i.reply({content:'ℹ️ You are already entered.',flags:MessageFlags.Ephemeral});g.people.push(i.user.id);saveStore();await i.message.edit({embeds:[live(g)],components:[buttons(id)]});return i.reply({content:'🎉 You are entered! Good luck.',flags:MessageFlags.Ephemeral})}if(a==='l'){const n=g.people.indexOf(i.user.id);if(n<0)return i.reply({content:'ℹ️ You are not entered.',flags:MessageFlags.Ephemeral});g.people.splice(n,1);saveStore();await i.message.edit({embeds:[live(g)],components:[buttons(id)]});return i.reply({content:'↩️ You left the giveaway.',flags:MessageFlags.Ephemeral})}if(a==='x'){if(i.user.id!==g.host&&!host(i))return i.reply({content:'❌ Only the giveaway host can end this.',flags:MessageFlags.Ephemeral});await i.deferUpdate();return finish(id)}}
+ }catch(e){console.error('[FSMM] giveaway interaction:',e.message);if(!i.replied&&!i.deferred)await i.reply({content:'❌ Giveaway error. Try again.',flags:MessageFlags.Ephemeral}).catch(()=>{})}});
+ return command;
 };
