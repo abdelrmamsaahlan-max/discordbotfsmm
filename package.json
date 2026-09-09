@@ -1,8 +1,8 @@
 {
   "name": "fsmm-discord-bot",
-  "version": "5.0.2",
+  "version": "5.0.3",
   "description": "FSMM Discord service ticket bot with hardened security controls",
-  "main": "src/index.js",
+  "main": "src/boot2.js",
   "scripts": {
     "start": "node src/boot2.js"
   },
