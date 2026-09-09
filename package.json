@@ -1,7 +1,7 @@
 {
   "name": "fsmm-discord-bot",
-  "version": "6.0.0",
-  "description": "FSMM Discord service ticket bot",
+  "version": "7.0.0",
+  "description": "FSMM Discord service ticket and giveaway bot",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js"
