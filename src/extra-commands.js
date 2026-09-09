@@ -1,275 +1,106 @@
 require('dotenv').config();
-const fs = require('fs');
-const path = require('path');
-const {
-  Client,
-  REST,
-  Routes,
-  SlashCommandBuilder,
-  EmbedBuilder,
-  PermissionFlagsBits,
-  MessageFlags,
-} = require('discord.js');
-
-const TOKEN = process.env.DISCORD_TOKEN;
-const CLIENT_ID = process.env.CLIENT_ID;
-const GUILD_ID = process.env.GUILD_ID;
-const STAFF_ROLE = 'FSMM Staff';
-const OWNER_ROLE = 'Owner';
-const DATA_FILE = process.env.EXTRA_DATA_FILE || path.join(__dirname, '..', 'data', 'extra-store.json');
-
-function load() {
-  try {
-    if (!fs.existsSync(DATA_FILE)) return { vouches: {}, warnings: {}, config: {} };
-    return { vouches: {}, warnings: {}, config: {}, ...JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')) };
-  } catch { return { vouches: {}, warnings: {}, config: {} }; }
+const fs=require('fs');
+const path=require('path');
+const {Client,REST,Routes,SlashCommandBuilder,EmbedBuilder,PermissionFlagsBits,MessageFlags,ChannelType}=require('discord.js');
+const TOKEN=process.env.DISCORD_TOKEN,CLIENT_ID=process.env.CLIENT_ID,GUILD_ID=process.env.GUILD_ID;
+const STAFF_ROLE='FSMM Staff',OWNER_ROLE='Owner';
+const DATA_FILE=process.env.EXTRA_DATA_FILE||path.join(__dirname,'..','data','extra-store.json');
+const VERSION='9.0.0';
+const defaults=()=>({vouches:{},warnings:{},config:{},actionLogs:{},activity:{}});
+function load(){try{if(!fs.existsSync(DATA_FILE))return defaults();return {...defaults(),...JSON.parse(fs.readFileSync(DATA_FILE,'utf8'))};}catch(e){console.error('[FSMM DATA] load',e.message);return defaults();}}
+let data=load();
+function save(){try{fs.mkdirSync(path.dirname(DATA_FILE),{recursive:true});const t=`${DATA_FILE}.tmp`;fs.writeFileSync(t,JSON.stringify(data,null,2));fs.renameSync(t,DATA_FILE);}catch(e){console.error('[FSMM DATA] save',e.message);}}
+const owner=i=>i.guild?.ownerId===i.user.id||Boolean(i.member?.roles?.cache?.some(r=>r.name===OWNER_ROLE));
+const staff=i=>owner(i)||Boolean(i.member?.roles?.cache?.some(r=>r.name===STAFF_ROLE));
+const admin=i=>staff(i)||Boolean(i.member?.permissions?.has(PermissionFlagsBits.Administrator));
+const reply=(i,c)=>i.reply({content:c,flags:MessageFlags.Ephemeral});
+const clean=(v,n=900)=>String(v??'').replace(/[\u0000-\u001F\u007F]/g,' ').replace(/@everyone|@here/gi,'@ mention').trim().slice(0,n)||'Not provided';
+const card=(t,d)=>new EmbedBuilder().setTitle(t).setDescription(d).setColor(0x5865f2).setFooter({text:`FSMM • v${VERSION}`});
+const cfg=g=>{data.config[g]=data.config[g]||{};return data.config[g];};
+function log(i,action,target,reason='No reason provided'){const k=i.guild.id;data.actionLogs[k]=data.actionLogs[k]||[];data.actionLogs[k].push({action,targetId:target||null,by:i.user.id,reason:clean(reason,500),at:Date.now()});data.actionLogs[k]=data.actionLogs[k].slice(-200);save();}
+function canAct(i,m){if(!m||m.id===i.user.id||m.id===i.guild.ownerId)return false;return owner(i)||i.member.roles.highest.comparePositionTo(m.roles.highest)>0;}
+function canRole(i,r){return r&&!r.managed&&r.id!==i.guild.id&&(owner(i)||i.member.roles.highest.comparePositionTo(r)>0);}
+async function transcript(ch){const ms=await ch.messages.fetch({limit:100});return [...ms.values()].sort((a,b)=>a.createdTimestamp-b.createdTimestamp).map(m=>`[${new Date(m.createdTimestamp).toISOString()}] ${m.author.tag}: ${m.content||'[embed/attachment]'}`).join('\n');}
+const commands=[
+new SlashCommandBuilder().setName('serverinfo').setDescription('Show detailed FSMM server information.'),
+new SlashCommandBuilder().setName('userinfo').setDescription('Show information about a member.').addUserOption(o=>o.setName('user').setDescription('Member').setRequired(false)),
+new SlashCommandBuilder().setName('avatar').setDescription('Show a member avatar.').addUserOption(o=>o.setName('user').setDescription('Member').setRequired(false)),
+new SlashCommandBuilder().setName('servericon').setDescription('Show the FSMM server icon.'),
+new SlashCommandBuilder().setName('roleinfo').setDescription('Show role information.').addRoleOption(o=>o.setName('role').setDescription('Role').setRequired(true)),
+new SlashCommandBuilder().setName('channelinfo').setDescription('Show channel information.').addChannelOption(o=>o.setName('channel').setDescription('Channel').setRequired(false)),
+new SlashCommandBuilder().setName('botinfo').setDescription('Show FSMM bot information.'),
+new SlashCommandBuilder().setName('vouch').setDescription('Leave a vouch for a member.').addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true)).addStringOption(o=>o.setName('service').setDescription('Service used').setMaxLength(80).setRequired(true)).addStringOption(o=>o.setName('review').setDescription('Your review').setMaxLength(500).setRequired(true)),
+new SlashCommandBuilder().setName('vouches').setDescription('Show a member vouch history.').addUserOption(o=>o.setName('user').setDescription('Member').setRequired(false)),
+new SlashCommandBuilder().setName('vouchleaderboard').setDescription('Show the FSMM vouch leaderboard.'),
+new SlashCommandBuilder().setName('leaderboard').setDescription('Show the FSMM vouch leaderboard.'),
+new SlashCommandBuilder().setName('removevouch').setDescription('Staff: remove the latest vouch.').addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true)),
+new SlashCommandBuilder().setName('vouchsearch').setDescription('Search vouches by keyword.').addStringOption(o=>o.setName('query').setDescription('Keyword').setMaxLength(80).setRequired(true)),
+new SlashCommandBuilder().setName('stats').setDescription('Show FSMM community statistics.'),
+new SlashCommandBuilder().setName('profile').setDescription('Show an FSMM member profile.').addUserOption(o=>o.setName('user').setDescription('Member').setRequired(false)),
+new SlashCommandBuilder().setName('activity').setDescription('Show FSMM activity.').addUserOption(o=>o.setName('user').setDescription('Member').setRequired(false)),
+new SlashCommandBuilder().setName('topmembers').setDescription('Show the most active recorded members.'),
+new SlashCommandBuilder().setName('warn').setDescription('Staff: warn a member.').addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true)).addStringOption(o=>o.setName('reason').setDescription('Reason').setMaxLength(500).setRequired(true)),
+new SlashCommandBuilder().setName('warnings').setDescription('Staff: view warnings.').addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true)),
+new SlashCommandBuilder().setName('unwarn').setDescription('Staff: remove the latest warning.').addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true)),
+new SlashCommandBuilder().setName('clear').setDescription('Staff: delete recent messages.').addIntegerOption(o=>o.setName('amount').setDescription('1-100').setMinValue(1).setMaxValue(100).setRequired(true)),
+new SlashCommandBuilder().setName('ban').setDescription('Staff: ban a member.').addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true)).addStringOption(o=>o.setName('reason').setDescription('Reason').setMaxLength(500)),
+new SlashCommandBuilder().setName('unban').setDescription('Staff: unban a user.').addStringOption(o=>o.setName('user_id').setDescription('User ID').setRequired(true)).addStringOption(o=>o.setName('reason').setDescription('Reason').setMaxLength(500)),
+new SlashCommandBuilder().setName('kick').setDescription('Staff: kick a member.').addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true)).addStringOption(o=>o.setName('reason').setDescription('Reason').setMaxLength(500)),
+new SlashCommandBuilder().setName('timeout').setDescription('Staff: timeout a member.').addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true)).addIntegerOption(o=>o.setName('minutes').setDescription('1-40320').setMinValue(1).setMaxValue(40320).setRequired(true)).addStringOption(o=>o.setName('reason').setDescription('Reason').setMaxLength(500)),
+new SlashCommandBuilder().setName('untimeout').setDescription('Staff: remove a timeout.').addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true)).addStringOption(o=>o.setName('reason').setDescription('Reason').setMaxLength(500)),
+new SlashCommandBuilder().setName('lock').setDescription('Staff: lock this channel.'),
+new SlashCommandBuilder().setName('unlock').setDescription('Staff: unlock this channel.'),
+new SlashCommandBuilder().setName('slowmode').setDescription('Staff: set channel slowmode.').addIntegerOption(o=>o.setName('seconds').setDescription('0-21600').setMinValue(0).setMaxValue(21600).setRequired(true)),
+new SlashCommandBuilder().setName('nick').setDescription('Staff: change a nickname.').addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true)).addStringOption(o=>o.setName('nickname').setDescription('Nickname or reset').setMaxLength(32).setRequired(true)),
+new SlashCommandBuilder().setName('role').setDescription('Staff: add or remove a role.').addStringOption(o=>o.setName('action').setDescription('Action').setRequired(true).addChoices({name:'Add',value:'add'},{name:'Remove',value:'remove'})).addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true)).addRoleOption(o=>o.setName('role').setDescription('Role').setRequired(true)),
+new SlashCommandBuilder().setName('modlogs').setDescription('Staff: show recent moderation logs.').addUserOption(o=>o.setName('user').setDescription('Optional member').setRequired(false)),
+new SlashCommandBuilder().setName('ticketstats').setDescription('Staff: show open FSMM ticket statistics.'),
+new SlashCommandBuilder().setName('transcript').setDescription('Staff: create a transcript of this channel.'),
+new SlashCommandBuilder().setName('staffhelp').setDescription('Show FSMM staff commands.'),
+new SlashCommandBuilder().setName('setwelcome').setDescription('Staff: set the welcome channel.').addChannelOption(o=>o.setName('channel').setDescription('Channel').setRequired(true)),
+new SlashCommandBuilder().setName('setautorole').setDescription('Staff: set the automatic join role.').addRoleOption(o=>o.setName('role').setDescription('Role').setRequired(true)),
+new SlashCommandBuilder().setName('settranscripts').setDescription('Staff: set transcript log channel.').addChannelOption(o=>o.setName('channel').setDescription('Channel').setRequired(true)),
+new SlashCommandBuilder().setName('setlogs').setDescription('Staff: set moderation/action log channel.').addChannelOption(o=>o.setName('channel').setDescription('Channel').setRequired(true)),
+new SlashCommandBuilder().setName('config').setDescription('Owner: show FSMM configuration.')
+].map(c=>c.toJSON());
+const staffOnly=new Set(['warn','warnings','unwarn','clear','ban','unban','kick','timeout','untimeout','lock','unlock','slowmode','nick','role','modlogs','ticketstats','transcript','staffhelp','setwelcome','setautorole','settranscripts','setlogs']);
+async function sendLogChannel(i,entry){const c=cfg(i.guild.id).logChannelId?i.guild.channels.cache.get(cfg(i.guild.id).logChannelId):null;if(!c?.isTextBased())return;await c.send({embeds:[card(`🛡️ ${entry.action}`,`**Target:** ${entry.targetId?`<@${entry.targetId}>`:'Channel'}\n**By:** <@${entry.by}>\n**Reason:** ${clean(entry.reason,500)}\n**Time:** <t:${Math.floor(entry.at/1000)}:F>`)]}).catch(()=>null);}
+const originalLogin=Client.prototype.login;
+Client.prototype.login=function(...args){const client=this;if(!client.__fsmmExtraCommandsAttached){client.__fsmmExtraCommandsAttached=true;
+client.once('clientReady',async()=>{try{const rest=new REST({version:'10'}).setToken(TOKEN);const existing=await rest.get(Routes.applicationGuildCommands(CLIENT_ID,GUILD_ID));const merged=[...existing.filter(c=>!commands.some(x=>x.name===c.name)),...commands];await rest.put(Routes.applicationGuildCommands(CLIENT_ID,GUILD_ID),{body:merged});console.log(`[FSMM v${VERSION}] REGISTERED ${commands.length} enhanced commands`);}catch(e){console.error('[FSMM REGISTER]',e.message);}});
+client.on('guildMemberAdd',async member=>{const c=cfg(member.guild.id);if(c.autoRoleId){const r=member.guild.roles.cache.get(c.autoRoleId);if(r?.editable)await member.roles.add(r,'FSMM auto-role').catch(()=>null);}if(c.welcomeChannelId){const ch=member.guild.channels.cache.get(c.welcomeChannelId);if(ch?.isTextBased())await ch.send(`👋 Welcome ${member} to **${clean(member.guild.name,80)}**!`).catch(()=>null);}});
+const spam=new Map();client.on('messageCreate',async m=>{if(!m.guild||m.author.bot||!m.member)return;if(admin({guild:m.guild,user:m.author,member:m.member}))return;const now=Date.now(),list=(spam.get(m.author.id)||[]).filter(t=>now-t<8000);list.push(now);spam.set(m.author.id,list);if(list.length>=7&&m.member.moderatable&&cfg(m.guild.id).antiSpam!==false){await m.member.timeout(60000,'FSMM anti-spam').catch(()=>null);spam.delete(m.author.id);await m.channel.send(`🛡️ ${m.author}, please slow down. You have been temporarily timed out for spam.`).then(x=>setTimeout(()=>x.delete().catch(()=>null),5000)).catch(()=>null);}const k=`${m.guild.id}:${m.author.id}`;data.activity[k]=data.activity[k]||{messages:0,lastMessage:0};data.activity[k].messages++;data.activity[k].lastMessage=now;if(data.activity[k].messages%10===0)save();});
+client.on('interactionCreate',async i=>{try{if(!i.isChatInputCommand()||!i.guild)return;const n=i.commandName;if(staffOnly.has(n)&&!admin(i))return reply(i,'❌ This command is for **FSMM Staff / Admins / Owners** only.');
+if(n==='serverinfo'){const o=await i.guild.fetchOwner().catch(()=>null);return i.reply({embeds:[card('🏠 FSMM SERVER INFO',`**Server:** ${clean(i.guild.name,100)}\n**Members:** ${i.guild.memberCount}\n**Channels:** ${i.guild.channels.cache.size}\n**Roles:** ${i.guild.roles.cache.size}\n**Owner:** ${o?.user?.tag||'Unknown'}\n**Created:** <t:${Math.floor(i.guild.createdTimestamp/1000)}:D>`)]});}
+if(n==='userinfo'){const u=i.options.getUser('user')||i.user,m=await i.guild.members.fetch(u.id).catch(()=>null),roles=m?.roles.cache.filter(r=>r.id!==i.guild.id).sort((a,b)=>b.position-a.position).map(r=>`<@&${r.id}>`).join(' ')||'None';return i.reply({embeds:[card('👤 USER INFO',`**User:** ${u.tag}\n**ID:** ${u.id}\n**Joined:** ${m?`<t:${Math.floor(m.joinedTimestamp/1000)}:R>`:'Not in server'}\n**Account:** <t:${Math.floor(u.createdTimestamp/1000)}:R>\n**Roles:** ${roles}`)]});}
+if(n==='avatar'){const u=i.options.getUser('user')||i.user;return i.reply({embeds:[new EmbedBuilder().setTitle(`🖼️ ${u.tag}'s Avatar`).setImage(u.displayAvatarURL({size:1024,extension:'png'})).setColor(0x5865f2).setFooter({text:`FSMM • v${VERSION}`})]});}
+if(n==='servericon'){const icon=i.guild.iconURL({size:1024,extension:'png'});const e=card('🖼️ FSMM SERVER ICON',icon?'Current server icon:':'This server has no custom icon.');if(icon)e.setImage(icon);return i.reply({embeds:[e]});}
+if(n==='roleinfo'){const r=i.options.getRole('role',true);return i.reply({embeds:[card('🎭 ROLE INFO',`**Role:** <@&${r.id}>\n**ID:** ${r.id}\n**Members:** ${r.members.size}\n**Position:** ${r.position}\n**Mentionable:** ${r.mentionable?'Yes':'No'}\n**Managed:** ${r.managed?'Yes':'No'}`)]});}
+if(n==='channelinfo'){const c=i.options.getChannel('channel')||i.channel;return i.reply({embeds:[card('📺 CHANNEL INFO',`**Channel:** <#${c.id}>\n**ID:** ${c.id}\n**Type:** ${c.type===ChannelType.GuildText?'Text':c.type===ChannelType.GuildCategory?'Category':'Other'}\n**Created:** <t:${Math.floor(c.createdTimestamp/1000)}:R>`)]});}
+if(n==='botinfo')return i.reply({embeds:[card('🤖 FSMM BOT',`**Version:** ${VERSION}\n**Library:** discord.js 14\n**Ping:** ${client.ws.ping}ms\n**Guilds:** ${client.guilds.cache.size}\n**Uptime:** <t:${Math.floor((Date.now()-client.readyTimestamp)/1000)}:R>`)]});
+if(['vouch','vouches','vouchleaderboard','leaderboard','removevouch','vouchsearch'].includes(n)){
+if(n==='vouch'){const u=i.options.getUser('user',true);if(u.id===i.user.id)return reply(i,'❌ You cannot vouch for yourself.');if(u.bot)return reply(i,'❌ You cannot vouch for a bot.');const k=`${i.guild.id}:${u.id}`,list=data.vouches[k]||[];if(list.some(v=>v.from===i.user.id))return reply(i,'❌ You have already vouched for this member.');const service=clean(i.options.getString('service',true),80),review=clean(i.options.getString('review',true),500);list.push({id:`${Date.now()}-${i.user.id}`,from:i.user.id,service,review,at:Date.now()});data.vouches[k]=list;save();return i.reply({embeds:[card('⭐ VOUCH ADDED',`**For:** <@${u.id}>\n**Service:** ${service}\n**Review:** ${review}\n**Total vouches:** **${list.length}**`)]});}
+if(n==='removevouch'){const u=i.options.getUser('user',true),k=`${i.guild.id}:${u.id}`,list=data.vouches[k]||[];if(!list.length)return reply(i,'❌ This member has no vouches.');const r=list.pop();data.vouches[k]=list;save();const e={action:'VOUCH REMOVED',targetId:u.id,by:i.user.id,reason:r.review,at:Date.now()};await sendLogChannel(i,e);return reply(i,`🗑️ Removed the latest vouch from **${u.tag}**. Remaining: **${list.length}**.`);}
+if(n==='vouchsearch'){const q=i.options.getString('query',true).toLowerCase();const rows=Object.entries(data.vouches).filter(([k])=>k.startsWith(`${i.guild.id}:`)).flatMap(([k,v])=>v.map(x=>({...x,target:k.split(':')[1]}))).filter(x=>`${x.service} ${x.review}`.toLowerCase().includes(q)).slice(-10).reverse();return i.reply({embeds:[card('🔎 VOUCH SEARCH',rows.length?rows.map(x=>`<@${x.target}> — **${clean(x.service,80)}** — ${clean(x.review,180)}`).join('\n'):'No matching vouches found.')]});}
+let u=i.user;if(n==='vouches')u=i.options.getUser('user')||i.user;const list=data.vouches[`${i.guild.id}:${u.id}`]||[];if(n==='vouches')return i.reply({embeds:[card(`⭐ ${u.tag}'S VOUCHES`,`**Total:** ${list.length}\n\n${list.slice(-10).reverse().map(v=>`• <@${v.from}> — **${clean(v.service,80)}**: ${clean(v.review,220)}`).join('\n')||'No vouches yet.'}`)]});const totals=Object.entries(data.vouches).filter(([k])=>k.startsWith(`${i.guild.id}:`)).map(([k,v])=>({id:k.split(':')[1],n:v.length})).sort((a,b)=>b.n-a.n).slice(0,10);return i.reply({embeds:[card('🏆 FSMM VOUCH LEADERBOARD',totals.map((x,j)=>`**${j+1}.** <@${x.id}> — **${x.n}** vouch${x.n===1?'':'es'}`).join('\n')||'No vouches yet.')]});}
+if(n==='stats'){const tv=Object.entries(data.vouches).filter(([k])=>k.startsWith(`${i.guild.id}:`)).reduce((a,[,v])=>a+v.length,0),tw=Object.entries(data.warnings).filter(([k])=>k.startsWith(`${i.guild.id}:`)).reduce((a,[,v])=>a+v.length,0),tickets=i.guild.channels.cache.filter(c=>c.parent?.name==='🎫 FSMM SERVICES'&&c.isTextBased()).size;return i.reply({embeds:[card('📊 FSMM STATS',`**Members:** ${i.guild.memberCount}\n**Channels:** ${i.guild.channels.cache.size}\n**Roles:** ${i.guild.roles.cache.size}\n**Open service tickets:** ${tickets}\n**Total vouches:** ${tv}\n**Stored warnings:** ${tw}`)]});}
+if(n==='profile'||n==='activity'){const u=i.options.getUser('user')||i.user,v=data.vouches[`${i.guild.id}:${u.id}`]||[],w=data.warnings[`${i.guild.id}:${u.id}`]||[],a=data.activity[`${i.guild.id}:${u.id}`]||{};return i.reply({embeds:[card(n==='profile'?`👤 ${u.tag}'S FSMM PROFILE`:`📈 ${u.tag}'S ACTIVITY`,`**Vouches:** ${v.length}\n**Warnings:** ${w.length}\n**Messages recorded:** ${a.messages||0}\n**Last activity:** ${a.lastMessage?`<t:${Math.floor(a.lastMessage/1000)}:R>`:'No activity recorded'}`)]});}
+if(n==='topmembers'){const rows=Object.entries(data.activity).filter(([k])=>k.startsWith(`${i.guild.id}:`)).map(([k,v])=>({id:k.split(':')[1],n:v.messages||0})).sort((a,b)=>b.n-a.n).slice(0,10);return i.reply({embeds:[card('🏆 FSMM TOP MEMBERS',rows.length?rows.map((x,j)=>`**${j+1}.** <@${x.id}> — **${x.n}** messages`).join('\n'):'No activity recorded yet.')]});}
+if(n==='warn'){const u=i.options.getUser('user',true),m=await i.guild.members.fetch(u.id).catch(()=>null);if(!canAct(i,m))return reply(i,'❌ You cannot warn that member because of role hierarchy or protection.');const reason=clean(i.options.getString('reason',true),500),k=`${i.guild.id}:${u.id}`;data.warnings[k]=data.warnings[k]||[];data.warnings[k].push({id:`${Date.now()}-${i.user.id}`,by:i.user.id,reason,at:Date.now()});save();log(i,'WARN',u.id,reason);return reply(i,`⚠️ **${u.tag}** warned. Total warnings: **${data.warnings[k].length}**.`);}
+if(n==='warnings'||n==='unwarn'){const u=i.options.getUser('user',true),k=`${i.guild.id}:${u.id}`,list=data.warnings[k]||[];if(n==='warnings')return reply(i,`⚠️ **${u.tag}** has **${list.length}** warning(s).${list.length?`\n${list.slice(-10).reverse().map((w,j)=>`${j+1}. ${clean(w.reason,300)} — <@${w.by}> — <t:${Math.floor(w.at/1000)}:R>`).join('\n')}`:''}`);if(!list.length)return reply(i,'❌ This member has no warnings.');list.pop();data.warnings[k]=list;save();log(i,'WARNING REMOVED',u.id,'Latest warning removed');return reply(i,`🗑️ Removed the latest warning from **${u.tag}**. Remaining: **${list.length}**.`);}
+if(n==='clear'){if(!i.channel?.isTextBased()||!i.channel.permissionsFor(i.guild.members.me)?.has(PermissionFlagsBits.ManageMessages))return reply(i,'❌ I need **Manage Messages** here.');const d=await i.channel.bulkDelete(i.options.getInteger('amount',true),true);log(i,'CLEAR',i.channelId,`${d.size} messages deleted`);return reply(i,`🧹 Deleted **${d.size}** message(s).`);}
+if(['ban','kick','timeout','untimeout'].includes(n)){const u=i.options.getUser('user',true),m=await i.guild.members.fetch(u.id).catch(()=>null);if(!canAct(i,m))return reply(i,'❌ You cannot moderate that member because of role hierarchy or protection.');const reason=clean(i.options.getString('reason')||'FSMM moderation',500);if(n==='ban'){if(!i.guild.members.me?.permissions.has(PermissionFlagsBits.BanMembers))return reply(i,'❌ I need **Ban Members** permission.');await m.ban({reason});}else if(n==='kick'){if(!i.guild.members.me?.permissions.has(PermissionFlagsBits.KickMembers))return reply(i,'❌ I need **Kick Members** permission.');await m.kick(reason);}else{if(!i.guild.members.me?.permissions.has(PermissionFlagsBits.ModerateMembers))return reply(i,'❌ I need **Moderate Members** permission.');if(!m.moderatable)return reply(i,'❌ I cannot moderate that member.');await m.timeout(n==='timeout'?i.options.getInteger('minutes',true)*60000:null,reason);}log(i,n.toUpperCase(),u.id,reason);return reply(i,n==='ban'?`🔨 ${u.tag} banned.`:n==='kick'?`👢 ${u.tag} kicked.`:n==='timeout'?`⏳ ${u.tag} timed out.`:`✅ Timeout removed from ${u.tag}.`);}
+if(n==='unban'){if(!i.guild.members.me?.permissions.has(PermissionFlagsBits.BanMembers))return reply(i,'❌ I need **Ban Members** permission.');const id=i.options.getString('user_id',true).trim(),reason=clean(i.options.getString('reason')||'FSMM moderation',500);if(!/^\d{15,25}$/.test(id))return reply(i,'❌ Invalid Discord user ID.');await i.guild.members.unban(id,reason);log(i,'UNBAN',id,reason);return reply(i,`✅ <@${id}> unbanned.`);}
+if(n==='lock'||n==='unlock'){if(!i.channel?.isTextBased())return reply(i,'❌ This is not a text channel.');if(!i.channel.permissionsFor(i.guild.members.me)?.has(PermissionFlagsBits.ManageChannels))return reply(i,'❌ I need **Manage Channels** here.');await i.channel.permissionOverwrites.edit(i.guild.roles.everyone,{SendMessages:n==='lock'?false:null});log(i,n.toUpperCase(),i.channelId);return reply(i,n==='lock'?'🔒 Channel locked.':'🔓 Channel unlocked.');}
+if(n==='slowmode'){if(!i.channel?.setRateLimitPerUser)return reply(i,'❌ Slowmode is not available here.');const s=i.options.getInteger('seconds',true);await i.channel.setRateLimitPerUser(s,'FSMM staff slowmode');log(i,'SLOWMODE',i.channelId,`${s}s`);return reply(i,`⏱️ Slowmode set to **${s}s**.`);}
+if(n==='nick'){const u=i.options.getUser('user',true),m=await i.guild.members.fetch(u.id).catch(()=>null),nn=i.options.getString('nickname',true);if(!canAct(i,m)||!m.moderatable)return reply(i,'❌ You cannot change that member nickname.');await m.setNickname(nn.toLowerCase()==='reset'?null:nn,'FSMM staff');log(i,'NICK',u.id,nn);return reply(i,`🏷️ Nickname updated for **${u.tag}**.`);}
+if(n==='role'){const a=i.options.getString('action',true),u=i.options.getUser('user',true),m=await i.guild.members.fetch(u.id).catch(()=>null),r=i.options.getRole('role',true);if(!canAct(i,m)||!m.manageable)return reply(i,'❌ You cannot manage that member.');if(!canRole(i,r))return reply(i,'❌ You cannot manage that role because of role hierarchy.');if(a==='add')await m.roles.add(r,'FSMM staff role action');else await m.roles.remove(r,'FSMM staff role action');log(i,`ROLE ${a.toUpperCase()}`,u.id,r.name);return reply(i,`${a==='add'?'➕':'➖'} ${a==='add'?'Added':'Removed'} <@&${r.id}> ${a==='add'?'to':'from'} **${u.tag}**.`);}
+if(n==='modlogs'){const u=i.options.getUser('user'),rows=(data.actionLogs[i.guild.id]||[]).filter(x=>!u||x.targetId===u.id).slice(-15).reverse();return i.reply({embeds:[card('🛡️ FSMM MODERATION LOGS',rows.length?rows.map(x=>`• **${x.action}** — ${x.targetId?`<@${x.targetId}>`:'channel'} — by <@${x.by}> — ${clean(x.reason,180)} — <t:${Math.floor(x.at/1000)}:R>`).join('\n'):'No logs yet.')]});}
+if(n==='ticketstats'){const cs=i.guild.channels.cache.filter(c=>c.parent?.name==='🎫 FSMM SERVICES'&&c.isTextBased()),x={middleman:0,support:0,base:0,other:0};cs.forEach(c=>{if(c.topic?.includes('TYPE:middleman'))x.middleman++;else if(c.topic?.includes('TYPE:support'))x.support++;else if(c.topic?.includes('TYPE:base'))x.base++;else x.other++;});return reply(i,`🎫 **Open tickets:** ${cs.size}\n🤝 Middleman: **${x.middleman}**\n🛟 Support: **${x.support}**\n🎨 Base Painting: **${x.base}**\n📦 Other: **${x.other}**`);}
+if(n==='transcript'){if(!i.channel?.isTextBased())return reply(i,'❌ This is not a text channel.');const text=await transcript(i.channel),c=cfg(i.guild.id),ch=c.transcriptChannelId?i.guild.channels.cache.get(c.transcriptChannelId):null;if(ch?.isTextBased())await ch.send({content:`📄 Transcript for **#${i.channel.name}** by <@${i.user.id}>`,files:[{attachment:Buffer.from(text||'No messages.'),name:`${i.channel.name}-transcript.txt`}]});else await i.user.send({content:`📄 FSMM transcript for **#${i.channel.name}**`,files:[{attachment:Buffer.from(text||'No messages.'),name:`${i.channel.name}-transcript.txt`}]}).catch(()=>null);log(i,'TRANSCRIPT',i.channelId,'Manual transcript');return reply(i,ch?'✅ Transcript sent to the configured log channel.':'✅ Transcript sent to your DMs if DMs are open.');}
+if(n==='setwelcome'||n==='setautorole'||n==='settranscripts'||n==='setlogs'){const c=cfg(i.guild.id);if(n==='setwelcome')c.welcomeChannelId=i.options.getChannel('channel',true).id;if(n==='setautorole')c.autoRoleId=i.options.getRole('role',true).id;if(n==='settranscripts')c.transcriptChannelId=i.options.getChannel('channel',true).id;if(n==='setlogs')c.logChannelId=i.options.getChannel('channel',true).id;save();return reply(i,'✅ FSMM configuration saved.');}
+if(n==='config'){if(!owner(i))return reply(i,'❌ Owner only.');const c=cfg(i.guild.id);return reply(i,`⚙️ **FSMM CONFIG**\n**Welcome:** ${c.welcomeChannelId?`<#${c.welcomeChannelId}>`:'Not set'}\n**Auto-role:** ${c.autoRoleId?`<@&${c.autoRoleId}>`:'Not set'}\n**Transcript logs:** ${c.transcriptChannelId?`<#${c.transcriptChannelId}>`:'Not set'}\n**Action logs:** ${c.logChannelId?`<#${c.logChannelId}>`:'Not set'}\n**Anti-spam:** ${c.antiSpam===false?'Off':'On'}`);}
+if(n==='staffhelp')return reply(i,'🛡️ **FSMM STAFF COMMANDS**\n\n**Moderation:** `/warn` `/warnings` `/unwarn` `/clear` `/ban` `/unban` `/kick` `/timeout` `/untimeout` `/lock` `/unlock` `/slowmode` `/nick` `/role` `/modlogs`\n\n**Tickets & logs:** `/ticketstats` `/transcript` `/settranscripts` `/setlogs`\n\n**Server:** `/setwelcome` `/setautorole` `/config`\n\n**Vouches:** `/removevouch`\n\nUse `/help` for public commands.');
+}catch(e){console.error('[FSMM EXTRA]',e.stack||e.message);if(!i.replied&&!i.deferred)await reply(i,'❌ Something went wrong. Please try again.');}});
 }
-let data = load();
-function save() {
-  try {
-    fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-    const tmp = `${DATA_FILE}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
-    fs.renameSync(tmp, DATA_FILE);
-  } catch (e) { console.error('[FSMM EXTRA DATA]', e.message); }
-}
-
-const owner = (i) => i.guild?.ownerId === i.user.id || i.member?.roles?.cache?.some(r => r.name === OWNER_ROLE);
-const staff = (i) => owner(i) || i.member?.roles?.cache?.some(r => r.name === STAFF_ROLE);
-const adminStaff = (i) => staff(i) || Boolean(i.member?.permissions?.has(PermissionFlagsBits.Administrator));
-const reply = (i, content) => i.reply({ content, flags: MessageFlags.Ephemeral });
-const clean = (v, max = 900) => String(v ?? '').replace(/@everyone|@here/gi, '@ mention').trim().slice(0, max) || 'Not provided';
-const card = (title, description) => new EmbedBuilder().setTitle(title).setDescription(description).setColor(0x5865f2).setFooter({ text: 'FSMM • Staff Tools' });
-
-const commands = [
-  new SlashCommandBuilder().setName('serverinfo').setDescription('Show FSMM server information.'),
-  new SlashCommandBuilder().setName('userinfo').setDescription('Show information about a member.')
-    .addUserOption(o => o.setName('user').setDescription('Member').setRequired(false)),
-  new SlashCommandBuilder().setName('avatar').setDescription('Show a member avatar.')
-    .addUserOption(o => o.setName('user').setDescription('Member').setRequired(false)),
-  new SlashCommandBuilder().setName('vouch').setDescription('Leave a vouch for a member.')
-    .addUserOption(o => o.setName('user').setDescription('Member you are vouching for').setRequired(true))
-    .addStringOption(o => o.setName('service').setDescription('Service used').setMaxLength(80).setRequired(true))
-    .addStringOption(o => o.setName('review').setDescription('Your review').setMaxLength(500).setRequired(true)),
-  new SlashCommandBuilder().setName('vouches').setDescription('Show a member vouch stats.')
-    .addUserOption(o => o.setName('user').setDescription('Member').setRequired(false)),
-  new SlashCommandBuilder().setName('vouchleaderboard').setDescription('Show the FSMM vouch leaderboard.'),
-  new SlashCommandBuilder().setName('stats').setDescription('Show FSMM community statistics.'),
-  new SlashCommandBuilder().setName('leaderboard').setDescription('Show the FSMM vouch leaderboard.'),
-  new SlashCommandBuilder().setName('warn').setDescription('Staff: warn a member.')
-    .addUserOption(o => o.setName('user').setDescription('Member').setRequired(true))
-    .addStringOption(o => o.setName('reason').setDescription('Reason').setMaxLength(500).setRequired(true)),
-  new SlashCommandBuilder().setName('warnings').setDescription('Staff: view warnings.')
-    .addUserOption(o => o.setName('user').setDescription('Member').setRequired(true)),
-  new SlashCommandBuilder().setName('clear').setDescription('Staff: delete recent messages.')
-    .addIntegerOption(o => o.setName('amount').setDescription('1-100').setMinValue(1).setMaxValue(100).setRequired(true)),
-  new SlashCommandBuilder().setName('ban').setDescription('Staff: ban a member.')
-    .addUserOption(o => o.setName('user').setDescription('Member to ban').setRequired(true))
-    .addStringOption(o => o.setName('reason').setDescription('Reason').setMaxLength(500).setRequired(false)),
-  new SlashCommandBuilder().setName('unban').setDescription('Staff: unban a user.')
-    .addStringOption(o => o.setName('user_id').setDescription('User ID').setRequired(true))
-    .addStringOption(o => o.setName('reason').setDescription('Reason').setMaxLength(500).setRequired(false)),
-  new SlashCommandBuilder().setName('kick').setDescription('Staff: kick a member.')
-    .addUserOption(o => o.setName('user').setDescription('Member to kick').setRequired(true))
-    .addStringOption(o => o.setName('reason').setDescription('Reason').setMaxLength(500).setRequired(false)),
-  new SlashCommandBuilder().setName('timeout').setDescription('Staff: timeout a member.')
-    .addUserOption(o => o.setName('user').setDescription('Member').setRequired(true))
-    .addIntegerOption(o => o.setName('minutes').setDescription('1-40320 minutes').setMinValue(1).setMaxValue(40320).setRequired(true))
-    .addStringOption(o => o.setName('reason').setDescription('Reason').setMaxLength(500).setRequired(false)),
-  new SlashCommandBuilder().setName('untimeout').setDescription('Staff: remove a timeout.')
-    .addUserOption(o => o.setName('user').setDescription('Member').setRequired(true)),
-  new SlashCommandBuilder().setName('lock').setDescription('Staff: lock this channel.'),
-  new SlashCommandBuilder().setName('unlock').setDescription('Staff: unlock this channel.'),
-  new SlashCommandBuilder().setName('ticketstats').setDescription('Staff: show open FSMM ticket statistics.'),
-  new SlashCommandBuilder().setName('transcript').setDescription('Staff: create a transcript of this ticket.'),
-  new SlashCommandBuilder().setName('staffhelp').setDescription('Show FSMM staff commands.'),
-  new SlashCommandBuilder().setName('setwelcome').setDescription('Owner/admin/staff: set the welcome channel.')
-    .addChannelOption(o => o.setName('channel').setDescription('Welcome channel').setRequired(true)),
-  new SlashCommandBuilder().setName('setautorole').setDescription('Owner/admin/staff: set the automatic join role.')
-    .addRoleOption(o => o.setName('role').setDescription('Role to give new members').setRequired(true)),
-  new SlashCommandBuilder().setName('settranscripts').setDescription('Owner/admin/staff: set the transcript log channel.')
-    .addChannelOption(o => o.setName('channel').setDescription('Transcript channel').setRequired(true)),
-].map(c => c.toJSON());
-
-function canActOn(i, member) {
-  if (!member) return false;
-  if (member.id === i.user.id || member.id === i.guild.ownerId) return false;
-  const executor = i.member;
-  if (executor?.roles?.highest?.comparePositionTo(member.roles.highest) <= 0 && !owner(i)) return false;
-  return true;
-}
-
-async function transcript(channel) {
-  const messages = await channel.messages.fetch({ limit: 100 });
-  return [...messages.values()].sort((a,b) => a.createdTimestamp - b.createdTimestamp)
-    .map(m => `[${new Date(m.createdTimestamp).toISOString()}] ${m.author.tag}: ${m.content || '[embed/attachment]'}`)
-    .join('\n');
-}
-
-const originalLogin = Client.prototype.login;
-Client.prototype.login = function patchedLogin(...args) {
-  const client = this;
-  if (!client.__fsmmExtraCommandsAttached) {
-    client.__fsmmExtraCommandsAttached = true;
-
-    client.once('clientReady', async () => {
-      try {
-        const rest = new REST({ version: '10' }).setToken(TOKEN);
-        const existing = await rest.get(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID));
-        const merged = [...existing.filter(c => !commands.some(x => x.name === c.name)), ...commands];
-        await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: merged });
-        console.log('[FSMM EXTRA COMMANDS] REGISTERED');
-      } catch (e) { console.error('[FSMM EXTRA COMMANDS] Register failed:', e.message); }
-    });
-
-    client.on('guildMemberAdd', async member => {
-      const cfg = data.config[member.guild.id] || {};
-      if (cfg.autoRoleId) {
-        const role = member.guild.roles.cache.get(cfg.autoRoleId);
-        if (role && role.editable) await member.roles.add(role, 'FSMM auto-role').catch(() => null);
-      }
-      if (cfg.welcomeChannelId) {
-        const ch = member.guild.channels.cache.get(cfg.welcomeChannelId);
-        if (ch?.isTextBased()) await ch.send(`👋 Welcome ${member} to **${clean(member.guild.name, 80)}**!`).catch(() => null);
-      }
-    });
-
-    const spam = new Map();
-    client.on('messageCreate', async message => {
-      if (!message.guild || message.author.bot || !message.member) return;
-      if (adminStaff({ guild: message.guild, user: message.author, member: message.member })) return;
-      const now = Date.now();
-      const list = (spam.get(message.author.id) || []).filter(t => now - t < 8000);
-      list.push(now); spam.set(message.author.id, list);
-      if (list.length >= 7 && message.member.moderatable) {
-        await message.member.timeout(60_000, 'FSMM anti-spam').catch(() => null);
-        spam.delete(message.author.id);
-        await message.channel.send(`🛡️ ${message.author}, slow down. You have been temporarily timed out for spam.`).then(m => setTimeout(() => m.delete().catch(() => null), 5000)).catch(() => null);
-      }
-    });
-
-    client.on('interactionCreate', async interaction => {
-      try {
-        if (!interaction.isChatInputCommand() || !interaction.guild) return;
-        const name = interaction.commandName;
-
-        if (['warn','warnings','clear','ban','unban','kick','timeout','untimeout','lock','unlock','ticketstats','transcript','staffhelp','setwelcome','setautorole','settranscripts'].includes(name) && !adminStaff(interaction)) return reply(interaction, '❌ This command is for **FSMM Staff / Admins / Owners** only.');
-
-        if (name === 'serverinfo') {
-          const o = await interaction.guild.fetchOwner().catch(() => null);
-          return interaction.reply({ embeds: [card('🏠 FSMM SERVER INFO', `**Server:** ${clean(interaction.guild.name, 100)}\n**Members:** ${interaction.guild.memberCount}\n**Channels:** ${interaction.guild.channels.cache.size}\n**Roles:** ${interaction.guild.roles.cache.size}\n**Owner:** ${o?.user?.tag || 'Unknown'}\n**Created:** <t:${Math.floor(interaction.guild.createdTimestamp/1000)}:D>`)], flags: MessageFlags.Ephemeral });
-        }
-        if (name === 'userinfo') {
-          const u = interaction.options.getUser('user') || interaction.user;
-          const m = await interaction.guild.members.fetch(u.id).catch(() => null);
-          return interaction.reply({ embeds: [card('👤 USER INFO', `**User:** ${u.tag}\n**ID:** ${u.id}\n**Joined:** ${m ? `<t:${Math.floor(m.joinedTimestamp/1000)}:R>` : 'Not in server'}\n**Account:** <t:${Math.floor(u.createdTimestamp/1000)}:R>\n**Roles:** ${m?.roles?.cache?.filter(r => r.id !== interaction.guild.id).map(r => r.name).join(', ') || 'None'}`)], flags: MessageFlags.Ephemeral });
-        }
-        if (name === 'avatar') {
-          const u = interaction.options.getUser('user') || interaction.user;
-          return interaction.reply({ embeds: [new EmbedBuilder().setTitle(`🖼️ ${u.tag}'s Avatar`).setImage(u.displayAvatarURL({size:1024, extension:'png'})).setColor(0x5865f2)], flags: MessageFlags.Ephemeral });
-        }
-
-        if (name === 'vouch' || name === 'vouches' || name === 'vouchleaderboard' || name === 'leaderboard') {
-          if (name === 'vouch') {
-            const target = interaction.options.getUser('user', true);
-            if (target.id === interaction.user.id) return reply(interaction, '❌ You cannot vouch for yourself.');
-            if (target.bot) return reply(interaction, '❌ You cannot vouch for a bot.');
-            const key = `${interaction.guild.id}:${target.id}`;
-            const list = data.vouches[key] || [];
-            if (list.some(v => v.from === interaction.user.id)) return reply(interaction, '❌ You have already vouched for this member.');
-            list.push({ from: interaction.user.id, service: clean(interaction.options.getString('service', true), 80), review: clean(interaction.options.getString('review', true), 500), at: Date.now() });
-            data.vouches[key] = list; save();
-            return interaction.reply({ embeds: [card('⭐ VOUCH ADDED', `**For:** <@${target.id}>\n**Service:** ${list.at(-1).service}\n**Review:** ${list.at(-1).review}\n**Total vouches:** **${list.length}**`)] });
-          }
-          let target = interaction.user;
-          if (name === 'vouches') target = interaction.options.getUser('user') || interaction.user;
-          const entries = data.vouches[`${interaction.guild.id}:${target.id}`] || [];
-          if (name === 'vouches') return interaction.reply({ embeds: [card(`⭐ ${target.tag}'S VOUCHES`, `**Total:** ${entries.length}\n\n${entries.slice(-5).reverse().map(v => `• <@${v.from}> — **${v.service}**: ${v.review}`).join('\n') || 'No vouches yet.')}] });
-          const totals = Object.entries(data.vouches).filter(([k]) => k.startsWith(`${interaction.guild.id}:`)).map(([k,v]) => ({ id:k.split(':')[1], n:v.length })).sort((a,b)=>b.n-a.n).slice(0,10);
-          return interaction.reply({ embeds: [card('🏆 FSMM VOUCH LEADERBOARD', totals.map((x,i)=>`**${i+1}.** <@${x.id}> — **${x.n}** vouch${x.n===1?'':'es'}`).join('\n') || 'No vouches yet.')] });
-        }
-
-        if (name === 'stats') {
-          const totalVouches = Object.entries(data.vouches).filter(([k]) => k.startsWith(`${interaction.guild.id}:`)).reduce((n,[,v]) => n+v.length, 0);
-          const openTickets = interaction.guild.channels.cache.filter(c => c.parent?.name === '🎫 FSMM SERVICES' && c.isTextBased()).size;
-          return interaction.reply({ embeds: [card('📊 FSMM STATS', `**Members:** ${interaction.guild.memberCount}\n**Channels:** ${interaction.guild.channels.cache.size}\n**Roles:** ${interaction.guild.roles.cache.size}\n**Open service channels:** ${openTickets}\n**Total vouches:** ${totalVouches}`)], flags: MessageFlags.Ephemeral });
-        }
-
-        if (name === 'warn') {
-          const u = interaction.options.getUser('user', true), reason = clean(interaction.options.getString('reason', true), 500);
-          const key = `${interaction.guild.id}:${u.id}`; data.warnings[key] = data.warnings[key] || [];
-          data.warnings[key].push({ by: interaction.user.id, reason, at: Date.now() }); save();
-          return reply(interaction, `⚠️ **${u.tag}** warned. Total warnings: **${data.warnings[key].length}**.`);
-        }
-        if (name === 'warnings') {
-          const u = interaction.options.getUser('user', true), list = data.warnings[`${interaction.guild.id}:${u.id}`] || [];
-          return reply(interaction, `⚠️ **${u.tag}** has **${list.length}** warning(s).${list.length ? `\n${list.slice(-10).map((w,i)=>`${i+1}. ${w.reason}`).join('\n')}` : ''}`);
-        }
-        if (name === 'clear') {
-          if (!interaction.channel?.isTextBased() || !interaction.channel.permissionsFor(interaction.guild.members.me)?.has(PermissionFlagsBits.ManageMessages)) return reply(interaction, '❌ I need **Manage Messages** here.');
-          const deleted = await interaction.channel.bulkDelete(interaction.options.getInteger('amount', true), true);
-          return reply(interaction, `🧹 Deleted **${deleted.size}** message(s).`);
-        }
-
-        if (['ban','kick','timeout','untimeout'].includes(name)) {
-          const u = interaction.options.getUser('user', true), m = await interaction.guild.members.fetch(u.id).catch(()=>null);
-          if (!canActOn(interaction, m)) return reply(interaction, '❌ You cannot moderate that member because of role hierarchy or protection.');
-          if (!interaction.guild.members.me?.permissions.has(PermissionFlagsBits.BanMembers) && name==='ban') return reply(interaction, '❌ I need **Ban Members** permission.');
-          if (!interaction.guild.members.me?.permissions.has(PermissionFlagsBits.KickMembers) && name==='kick') return reply(interaction, '❌ I need **Kick Members** permission.');
-          if (name==='timeout' || name==='untimeout') {
-            if (!interaction.guild.members.me?.permissions.has(PermissionFlagsBits.ModerateMembers)) return reply(interaction, '❌ I need **Moderate Members** permission.');
-            if (!m.moderatable) return reply(interaction, '❌ I cannot moderate that member.');
-            const reason = clean(interaction.options.getString('reason') || 'FSMM moderation', 500);
-            await m.timeout(name==='timeout' ? interaction.options.getInteger('minutes', true)*60_000 : null, reason);
-            return reply(interaction, name==='timeout' ? `⏳ ${u.tag} timed out.` : `✅ Timeout removed from ${u.tag}.`);
-          }
-          const reason = clean(interaction.options.getString('reason') || 'FSMM moderation', 500);
-          if (name==='ban') await m.ban({ reason }); else await m.kick(reason);
-          return reply(interaction, name==='ban' ? `🔨 ${u.tag} banned.` : `👢 ${u.tag} kicked.`);
-        }
-        if (name==='unban') {
-          if (!interaction.guild.members.me?.permissions.has(PermissionFlagsBits.BanMembers)) return reply(interaction, '❌ I need **Ban Members** permission.');
-          const id = interaction.options.getString('user_id', true).trim();
-          if (!/^\d{15,25}$/.test(id)) return reply(interaction, '❌ Invalid Discord user ID.');
-          await interaction.guild.members.unban(id, clean(interaction.options.getString('reason') || 'FSMM moderation', 500));
-          return reply(interaction, `✅ <@${id}> unbanned.`);
-        }
-        if (name==='lock' || name==='unlock') {
-          const everyone = interaction.guild.roles.everyone;
-          await interaction.channel.permissionOverwrites.edit(everyone, { SendMessages: name==='lock' ? false : null });
-          return reply(interaction, name==='lock' ? '🔒 Channel locked.' : '🔓 Channel unlocked.');
-        }
-        if (name==='ticketstats') {
-          const channels = interaction.guild.channels.cache.filter(c => c.parent?.name === '🎫 FSMM SERVICES' && c.isTextBased());
-          const count = { middleman:0, support:0, base:0, other:0 };
-          channels.forEach(c => { if(c.topic?.includes('TYPE:middleman')) count.middleman++; else if(c.topic?.includes('TYPE:support')) count.support++; else if(c.topic?.includes('TYPE:base')) count.base++; else count.other++; });
-          return reply(interaction, `🎫 **Open tickets:** ${channels.size}\n🤝 Middleman: **${count.middleman}**\n🛟 Support: **${count.support}**\n🎨 Base Painting: **${count.base}**\n📦 Other: **${count.other}**`);
-        }
-        if (name==='transcript') {
-          if (!interaction.channel?.isTextBased()) return reply(interaction, '❌ This is not a text channel.');
-          const text = await transcript(interaction.channel);
-          const cfg = data.config[interaction.guild.id] || {};
-          const log = cfg.transcriptChannelId ? interaction.guild.channels.cache.get(cfg.transcriptChannelId) : null;
-          if (log?.isTextBased()) await log.send({ content:`📄 Transcript for **#${interaction.channel.name}** by <@${interaction.user.id}>`, files:[{attachment:Buffer.from(text || 'No messages.'), name:`${interaction.channel.name}-transcript.txt`}] });
-          else await interaction.user.send({ content:`📄 FSMM transcript for **#${interaction.channel.name}**`, files:[{attachment:Buffer.from(text || 'No messages.'), name:`${interaction.channel.name}-transcript.txt`}] }).catch(()=>null);
-          return reply(interaction, log ? '✅ Transcript sent to the configured log channel.' : '✅ Transcript sent to your DMs if DMs are open.');
-        }
-        if (name==='setwelcome' || name==='setautorole' || name==='settranscripts') {
-          data.config[interaction.guild.id] = data.config[interaction.guild.id] || {};
-          if (name==='setwelcome') data.config[interaction.guild.id].welcomeChannelId = interaction.options.getChannel('channel', true).id;
-          if (name==='setautorole') data.config[interaction.guild.id].autoRoleId = interaction.options.getRole('role', true).id;
-          if (name==='settranscripts') data.config[interaction.guild.id].transcriptChannelId = interaction.options.getChannel('channel', true).id;
-          save();
-          return reply(interaction, '✅ FSMM configuration saved.');
-        }
-        if (name==='staffhelp') {
-          return reply(interaction, '🛡️ **FSMM STAFF COMMANDS**\n`/warn` `/warnings`\n`/clear`\n`/ban` `/unban` `/kick` `/timeout` `/untimeout`\n`/lock` `/unlock`\n`/ticketstats`\n`/transcript`\n`/setwelcome` `/setautorole` `/settranscripts`\n\nPublic: `/vouch` `/vouches` `/leaderboard` `/stats` `/serverinfo` `/userinfo` `/avatar`\n\n**Access:** FSMM Staff, Admins, and Owner only for moderation/configuration commands.');
-        }
-      } catch (e) {
-        console.error('[FSMM EXTRA] Error:', e.message);
-        if (!interaction.replied && !interaction.deferred) await reply(interaction, '❌ Something went wrong.');
-      }
-    });
-  }
-  return originalLogin.apply(this, args);
-};
+return originalLogin.apply(this,args);};
