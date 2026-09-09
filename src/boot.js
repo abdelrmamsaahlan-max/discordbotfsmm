@@ -2,6 +2,10 @@ const fs = require('fs');
 const path = require('path');
 const Module = require('module');
 
+// Load FSMM runtime extensions before compiling the main bot entrypoint.
+require('./extra-commands.js');
+require('./visual-fixes.js');
+
 const indexPath = path.join(__dirname, 'index.js');
 let source = fs.readFileSync(indexPath, 'utf8');
 
