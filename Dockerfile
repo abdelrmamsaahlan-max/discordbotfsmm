@@ -7,4 +7,4 @@ RUN npm install --ignore-scripts --no-audit --no-fund
 
 COPY . .
 
-CMD ["node", "src/index-v8-1.js"]
+CMD ["node", "src/index.js"]
