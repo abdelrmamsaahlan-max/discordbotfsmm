@@ -1,10 +1,10 @@
 {
   "name": "fsmm-discord-bot",
-  "version": "8.0.0",
+  "version": "8.1.0",
   "description": "FSMM Discord service ticket and giveaway bot — Railway-ready factory release",
-  "main": "src/index.js",
+  "main": "src/index-v8-1.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index-v8-1.js"
   },
   "engines": {
     "node": ">=20"
