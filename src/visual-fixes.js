@@ -1,7 +1,7 @@
 const { EmbedBuilder } = require('discord.js');
 
 // Discord cannot render the old guessed Fandom filenames used by the bot.
-// Normalize them to the MediaWiki-style filenames used by the Base gallery.
+// Normalize all ten mutation-base previews to the canonical MediaWiki names.
 const BASE_FILES = {
   Candy: 'Candy_Base.png',
   Lava: 'Lava_Base.png',
@@ -45,8 +45,22 @@ EmbedBuilder.prototype.setTitle = function setTitle(title) {
 EmbedBuilder.prototype.setDescription = function setDescription(description) {
   if (typeof description === 'string' && this.data?.title?.includes('FSMM GIVEAWAY')) {
     const text = description.trim();
-    if (!text.includes('FSMM GIVEAWAY EVENT')) {
-      description = `━━━━━━━━━━━━━━━━━━━━\n🎉 **FSMM GIVEAWAY EVENT**\n━━━━━━━━━━━━━━━━━━━━\n\n${text}\n\n> ✨ Good luck and have fun!\n`;
+
+    // Keep ended giveaways readable and preserve their existing entry count.
+    if (this.data.title === '🎉 FSMM GIVEAWAY' && !text.includes('FSMM GIVEAWAY EVENT')) {
+      const prize = text.match(/\*\*Prize:\*\*\s*([^\n]+)/)?.[1] || 'Not provided';
+      const winners = text.match(/\*\*Winners:\*\*\s*([^\n]+)/)?.[1] || 'Not provided';
+      const ends = text.match(/\*\*Ends:\*\*\s*([^\n]+)/)?.[1] || 'Not provided';
+
+      description = '━━━━━━━━━━━━━━━━━━━━\n🎉 **FSMM GIVEAWAY EVENT**\n━━━━━━━━━━━━━━━━━━━━\n\nEnter using the button below. Good luck!';
+      originalSetDescription.call(this, description);
+      this.addFields(
+        { name: '🎁 Prize', value: prize.slice(0, 1024), inline: false },
+        { name: '🏆 Winners', value: winners, inline: true },
+        { name: '👥 Entries', value: '0', inline: true },
+        { name: '⏰ Ends', value: ends, inline: false },
+      );
+      return this;
     }
   }
   return originalSetDescription.call(this, description);
