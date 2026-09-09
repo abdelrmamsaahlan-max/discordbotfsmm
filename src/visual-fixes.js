@@ -1,7 +1,6 @@
 const { EmbedBuilder } = require('discord.js');
 
-// Discord cannot render the old guessed Fandom filenames used by the bot.
-// Normalize all ten mutation-base previews to the canonical MediaWiki names.
+// Canonical MediaWiki filenames used by the SAB Fandom file redirects.
 const BASE_FILES = {
   Candy: 'Candy_Base.png',
   Lava: 'Lava_Base.png',
@@ -15,19 +14,28 @@ const BASE_FILES = {
   Crystal: 'Crystal_Base.png',
 };
 
+const normalizeBaseName = value => String(value || '')
+  .replace(/\.png$/i, '')
+  .replace(/[_-]?Base$/i, '')
+  .replace(/[_-]+/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim()
+  .toLowerCase();
+
 const originalSetImage = EmbedBuilder.prototype.setImage;
-const originalSetDescription = EmbedBuilder.prototype.setDescription;
 const originalSetTitle = EmbedBuilder.prototype.setTitle;
 
 EmbedBuilder.prototype.setImage = function setImage(url) {
   if (typeof url === 'string' && url.includes('stealabrainrot.fandom.com/wiki/Special:Redirect/file/')) {
-    const match = decodeURIComponent(url).match(/\/file\/([^/?#]+)$/i);
-    if (match) {
-      const oldName = match[1].replace(/Base\.png$/i, '').replace(/[_-]+/g, ' ').trim();
-      const base = Object.keys(BASE_FILES).find((name) => name.toLowerCase() === oldName.toLowerCase());
+    try {
+      const rawFile = decodeURIComponent(url).split('/file/').pop().split(/[?#]/)[0];
+      const normalized = normalizeBaseName(rawFile);
+      const base = Object.keys(BASE_FILES).find(name => normalizeBaseName(name) === normalized);
       if (base) {
         url = `https://stealabrainrot.fandom.com/wiki/Special:Redirect/file/${encodeURIComponent(BASE_FILES[base])}`;
       }
+    } catch {
+      // Keep the original URL if it cannot be parsed.
     }
   }
   return originalSetImage.call(this, url);
@@ -40,30 +48,6 @@ EmbedBuilder.prototype.setTitle = function setTitle(title) {
     this.setTimestamp();
   }
   return result;
-};
-
-EmbedBuilder.prototype.setDescription = function setDescription(description) {
-  if (typeof description === 'string' && this.data?.title?.includes('FSMM GIVEAWAY')) {
-    const text = description.trim();
-
-    // Keep ended giveaways readable and preserve their existing entry count.
-    if (this.data.title === '🎉 FSMM GIVEAWAY' && !text.includes('FSMM GIVEAWAY EVENT')) {
-      const prize = text.match(/\*\*Prize:\*\*\s*([^\n]+)/)?.[1] || 'Not provided';
-      const winners = text.match(/\*\*Winners:\*\*\s*([^\n]+)/)?.[1] || 'Not provided';
-      const ends = text.match(/\*\*Ends:\*\*\s*([^\n]+)/)?.[1] || 'Not provided';
-
-      description = '━━━━━━━━━━━━━━━━━━━━\n🎉 **FSMM GIVEAWAY EVENT**\n━━━━━━━━━━━━━━━━━━━━\n\nEnter using the button below. Good luck!';
-      originalSetDescription.call(this, description);
-      this.addFields(
-        { name: '🎁 Prize', value: prize.slice(0, 1024), inline: false },
-        { name: '🏆 Winners', value: winners, inline: true },
-        { name: '👥 Entries', value: '0', inline: true },
-        { name: '⏰ Ends', value: ends, inline: false },
-      );
-      return this;
-    }
-  }
-  return originalSetDescription.call(this, description);
 };
 
 module.exports = { BASE_FILES };
