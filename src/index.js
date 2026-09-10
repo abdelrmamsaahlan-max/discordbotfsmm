@@ -29,11 +29,13 @@ if (!TOKEN || !CLIENT_ID || !GUILD_ID) {
   throw new Error('Missing required environment variables: DISCORD_TOKEN, CLIENT_ID, GUILD_ID');
 }
 
-const VERSION = '10.0.0';
+const VERSION = '11.0.0';
 const STAFF_ROLE = 'FSMM Staff';
 const MM_ROLE = 'FSMM Middleman';
+const BASE_PAINTER_ROLE = 'FSMM Base Painter';
 const OWNER_ROLE = 'Owner';
 const CATEGORY_NAME = '🎫 FSMM SERVICES';
+const LOG_CHANNEL_NAME = 'fsmm-logs';
 const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, '..', 'data', 'store.json');
 const MAX_OPEN_TICKETS = 3;
 
@@ -77,20 +79,21 @@ function embed(title, description) {
     .setTitle(title)
     .setDescription(description)
     .setColor(0x5865f2)
-    .setFooter({ text: `FSMM • v${VERSION}` });
+    .setFooter({ text: 'FSMM' });
 }
 
 function row(component) {
   return new ActionRowBuilder().addComponents(component);
 }
 
-function closeButton() {
-  return row(new ButtonBuilder().setCustomId('fsmm_close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger));
+function isOwner(interaction) {
+  return interaction.guild?.ownerId === interaction.user.id ||
+    Boolean(interaction.member?.roles?.cache?.some((role) => role.name === OWNER_ROLE));
 }
 
-function baseImage(base) {
-  const file = BASE_FILES[base] || `${base}Base.png`;
-  return `https://stealabrainrot.fandom.com/wiki/Special:Redirect/file/${encodeURIComponent(file)}`;
+function isStaff(interaction) {
+  return isOwner(interaction) ||
+    Boolean(interaction.member?.roles?.cache?.some((role) => role.name === STAFF_ROLE));
 }
 
 function defaultStore() {
@@ -121,125 +124,192 @@ function saveStore() {
 
 let store = loadStore();
 
-function isOwner(interaction) {
-  return interaction.guild?.ownerId === interaction.user.id || Boolean(interaction.member?.roles?.cache?.some((role) => role.name === OWNER_ROLE));
-}
-
-function isStaff(interaction) {
-  return isOwner(interaction) || Boolean(interaction.member?.roles?.cache?.some((role) => role.name === STAFF_ROLE));
-}
-
 async function ensureRolesAndCategory(guild) {
   const findRole = (name) => guild.roles.cache.find((role) => role.name === name);
   let staff = findRole(STAFF_ROLE);
   let mm = findRole(MM_ROLE);
+  let basePainter = findRole(BASE_PAINTER_ROLE);
   let owner = findRole(OWNER_ROLE);
 
   if (!staff) staff = await guild.roles.create({ name: STAFF_ROLE, reason: 'FSMM bot setup' });
   if (!mm) mm = await guild.roles.create({ name: MM_ROLE, reason: 'FSMM bot setup' });
+  if (!basePainter) basePainter = await guild.roles.create({ name: BASE_PAINTER_ROLE, reason: 'FSMM bot setup' });
   if (!owner) owner = await guild.roles.create({ name: OWNER_ROLE, reason: 'FSMM bot setup' });
 
   let category = guild.channels.cache.find((channel) => channel.type === ChannelType.GuildCategory && channel.name === CATEGORY_NAME);
   if (!category) category = await guild.channels.create({ name: CATEGORY_NAME, type: ChannelType.GuildCategory, reason: 'FSMM bot setup' });
 
-  return { staff, mm, owner, category };
+  let logs = guild.channels.cache.find((channel) => channel.type === ChannelType.GuildText && channel.name === LOG_CHANNEL_NAME);
+  if (!logs) {
+    logs = await guild.channels.create({
+      name: LOG_CHANNEL_NAME,
+      type: ChannelType.GuildText,
+      reason: 'FSMM moderation and ticket logs',
+      permissionOverwrites: [
+        { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+        { id: staff.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+        { id: owner.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+      ],
+    });
+  }
+
+  return { staff, mm, basePainter, owner, category, logs };
+}
+
+async function logEvent(guild, type, details) {
+  try {
+    const { logs } = await ensureRolesAndCategory(guild);
+    await logs.send({ embeds: [embed(`🛡️ FSMM ${type}`, details)] });
+    console.log(`[FSMM LOG] ${type}`);
+  } catch (error) {
+    console.error(`[FSMM LOG] ${type} failed:`, error.message);
+  }
 }
 
 function middlemanMenu() {
-  return row(new StringSelectMenuBuilder()
-    .setCustomId('fsmm_mm_pick')
-    .setPlaceholder('🤝 Select trade value...')
-    .addOptions(MM_VALUES.map(([label, description, emoji]) => ({ label, value: label, description, emoji }))));
+  return row(new StringSelectMenuBuilder().setCustomId('fsmm_mm_pick').setPlaceholder('🤝 Select trade value...').addOptions(MM_VALUES.map(([label, description, emoji]) => ({ label, value: label, description, emoji }))));
 }
-
 function supportMenu() {
-  return row(new StringSelectMenuBuilder()
-    .setCustomId('fsmm_support_pick')
-    .setPlaceholder('🛟 Select support type...')
-    .addOptions(SUPPORT_VALUES.map(([label, value, emoji, description]) => ({ label, value, emoji, description }))));
+  return row(new StringSelectMenuBuilder().setCustomId('fsmm_support_pick').setPlaceholder('🛟 Select support type...').addOptions(SUPPORT_VALUES.map(([label, value, emoji, description]) => ({ label, value, emoji, description }))));
 }
-
 function baseMenu() {
-  return row(new StringSelectMenuBuilder()
-    .setCustomId('fsmm_base_pick')
-    .setPlaceholder('🎨 Select a base to preview...')
-    .addOptions(BASES.map((base) => ({ label: base, value: base, description: `${base} Base Painting`, emoji: BASE_EMOJIS[base] }))));
+  return row(new StringSelectMenuBuilder().setCustomId('fsmm_base_pick').setPlaceholder('🎨 Select a base to preview...').addOptions(BASES.map((base) => ({ label: base, value: base, description: `${base} Base Painting`, emoji: BASE_EMOJIS[base] }))));
 }
-
 function panelConfigs() {
   return [
-    ['🤝・middleman', embed('🤝 FSMM MIDDLEMAN', 'Need a safe middleman?\n\nChoose the trade value below. You will then answer a few questions before a private ticket is created.'), middlemanMenu()],
-    ['🛟・support', embed('🛟 FSMM SUPPORT', 'Choose exactly what you need:\n\n🎉 **Host a Giveaway**\n🎁 **Claim a Giveaway**\n🚨 **Report**\n📋 **Apply for a Role**'), supportMenu()],
-    ['🎨・base-painting', embed('🎨 FSMM BASE PAINTING', 'Select a base below to **preview it first**. You can continue to the request form after checking the preview.'), baseMenu()],
+    ['🤝・middleman', embed('🤝 FSMM MIDDLEMAN', 'Need a safe middleman?\n\nChoose the trade value below. You will answer a few questions before a private ticket is created.'), middlemanMenu()],
+    ['🛟・support', embed('🛟 FSMM SUPPORT', 'Choose what you need:\n\n🎉 **Host a Giveaway**\n🎁 **Claim a Giveaway**\n🚨 **Report**\n📋 **Apply for a Role**'), supportMenu()],
+    ['🎨・base-painting', embed('🎨 FSMM BASE PAINTING', 'Select a base to preview it first, then continue to the request form.'), baseMenu()],
   ];
 }
-
 async function upsertPanel(channel, panelEmbed, components) {
   const messages = await channel.messages.fetch({ limit: 20 });
   const existing = messages.find((message) => message.author.id === client.user.id && message.embeds.length > 0);
   if (existing) return existing.edit({ embeds: [panelEmbed], components: [components] });
   return channel.send({ embeds: [panelEmbed], components: [components] });
 }
-
 async function syncPanels(guild) {
   const { category } = await ensureRolesAndCategory(guild);
   let ready = 0;
   for (const [channelName, panelEmbed, components] of panelConfigs()) {
     let channel = guild.channels.cache.find((item) => item.type === ChannelType.GuildText && item.name === channelName);
-    if (!channel) {
-      channel = await guild.channels.create({ name: channelName, type: ChannelType.GuildText, parent: category.id, reason: 'FSMM panel setup' });
-    }
+    if (!channel) channel = await guild.channels.create({ name: channelName, type: ChannelType.GuildText, parent: category.id, reason: 'FSMM panel setup' });
     await upsertPanel(channel, panelEmbed, components);
     ready += 1;
     console.log(`[FSMM PANELS] edited #${channelName}`);
   }
   console.log(`[FSMM PANELS] READY ${ready}/3`);
 }
-
 function input(id, label, style = TextInputStyle.Short, required = true, max = 900, placeholder) {
   const component = new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(style).setRequired(required).setMaxLength(max);
   if (placeholder) component.setPlaceholder(placeholder);
   return component;
 }
-
 function mmModal(value) {
-  const modal = new ModalBuilder().setCustomId(`fsmm_mm_modal:${encodeURIComponent(value)}`).setTitle('FSMM Middleman Request');
-  return modal.addComponents(row(input('giving', 'What are YOU giving?', TextInputStyle.Paragraph)), row(input('receiving', 'What is the OTHER TRADER giving?', TextInputStyle.Paragraph)), row(input('other', 'Other trader username', TextInputStyle.Short, true, 100, '@username')), row(input('tip', 'What are you tipping?', TextInputStyle.Short, false, 300, 'Optional')));
+  return new ModalBuilder().setCustomId(`fsmm_mm_modal:${encodeURIComponent(value)}`).setTitle('FSMM Middleman Request').addComponents(
+    row(input('giving', 'What are YOU giving?', TextInputStyle.Paragraph)),
+    row(input('receiving', 'What is the OTHER TRADER giving?', TextInputStyle.Paragraph)),
+    row(input('other', 'Other trader username', TextInputStyle.Short, true, 100, '@username')),
+    row(input('tip', 'What are you tipping?', TextInputStyle.Short, false, 300, 'Optional')),
+  );
 }
-
 function supportModal(kind) {
   const names = Object.fromEntries(SUPPORT_VALUES.map(([label, value]) => [value, label]));
   const question = kind === 'role_apply' ? 'Why should we accept your application?' : 'Tell us what you need';
-  const modal = new ModalBuilder().setCustomId(`fsmm_support_modal:${kind}`).setTitle(names[kind] || 'FSMM Support');
-  return modal.addComponents(row(input('details', question, TextInputStyle.Paragraph)), row(input('roblox', 'Roblox username', TextInputStyle.Short, false, 100, 'Optional')));
+  return new ModalBuilder().setCustomId(`fsmm_support_modal:${kind}`).setTitle(names[kind] || 'FSMM Support').addComponents(
+    row(input('details', question, TextInputStyle.Paragraph)),
+    row(input('roblox', 'Roblox username', TextInputStyle.Short, false, 100, 'Optional')),
+  );
 }
-
 function paintModal(base) {
-  const modal = new ModalBuilder().setCustomId(`fsmm_paint_modal:${encodeURIComponent(base)}`).setTitle(`${base} Base Painting`);
-  return modal.addComponents(row(input('roblox', 'Roblox username')), row(input('payment', 'What is your payment?', TextInputStyle.Paragraph, true, 500)), row(input('collateral', 'What is your collateral?', TextInputStyle.Paragraph, true, 500)), row(input('extra', 'Extra details', TextInputStyle.Paragraph, false, 900, 'Optional')));
+  return new ModalBuilder().setCustomId(`fsmm_paint_modal:${encodeURIComponent(base)}`).setTitle(`${base} Base Painting`).addComponents(
+    row(input('roblox', 'Roblox username')),
+    row(input('payment', 'What is your payment?', TextInputStyle.Paragraph, true, 500)),
+    row(input('collateral', 'What is your collateral?', TextInputStyle.Paragraph, true, 500)),
+    row(input('extra', 'Extra details', TextInputStyle.Paragraph, false, 900, 'Optional')),
+  );
 }
-
+function baseImage(base) {
+  const file = BASE_FILES[base] || `${base}Base.png`;
+  return `https://stealabrainrot.fandom.com/wiki/Special:Redirect/file/${encodeURIComponent(file)}`;
+}
 function basePreview(base) {
   const preview = embed(`${BASE_EMOJIS[base] || '🎨'} ${base} BASE PREVIEW`, `**Base:** ${base}\n\nIf this is the base you want painted, press **Continue to Request** below.`);
   preview.setImage(baseImage(base));
   return preview;
 }
-
 function baseContinueButton(base) {
   return row(new ButtonBuilder().setCustomId(`fsmm_base_continue:${encodeURIComponent(base)}`).setLabel('Continue to Request').setEmoji('🎨').setStyle(ButtonStyle.Primary));
 }
-
 function ticketCount(guild, userId) {
   const category = guild.channels.cache.find((channel) => channel.type === ChannelType.GuildCategory && channel.name === CATEGORY_NAME);
   if (!category) return 0;
   return category.children.cache.filter((channel) => channel.type === ChannelType.GuildText && channel.topic?.includes(`FSMM_USER:${userId}`)).size;
 }
-
+function ticketTypeFromTopic(topic = '') {
+  return topic.match(/TYPE:([^\s]+)/)?.[1] || 'unknown';
+}
+function claimedIdFromTopic(topic = '') {
+  return topic.match(/CLAIMED_BY:(\d+)/)?.[1] || null;
+}
+function claimAllowed(interaction, type) {
+  if (isOwner(interaction) || isStaff(interaction)) return true;
+  if (type === 'middleman') return Boolean(interaction.member?.roles?.cache?.some((role) => role.name === MM_ROLE));
+  if (type === 'base-painting') return Boolean(interaction.member?.roles?.cache?.some((role) => role.name === BASE_PAINTER_ROLE));
+  return false;
+}
+function ticketButtons(type, claimedBy = null) {
+  const claim = new ButtonBuilder().setCustomId('fsmm_claim').setLabel(claimedBy ? 'Ticket Claimed' : 'Claim Ticket').setEmoji(claimedBy ? '✅' : '🙋').setStyle(claimedBy ? ButtonStyle.Secondary : ButtonStyle.Primary).setDisabled(Boolean(claimedBy));
+  const close = new ButtonBuilder().setCustomId('fsmm_close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger);
+  return row(claim, close);
+}
+function typeLabel(type) {
+  return type === 'middleman' ? 'Middleman' : type === 'support' ? 'Support' : type === 'base-painting' ? 'Base Painting' : 'Ticket';
+}
+async function fetchTranscript(channel) {
+  const messages = [];
+  let before;
+  while (true) {
+    const batch = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+    if (!batch.size) break;
+    messages.push(...batch.values());
+    if (batch.size < 100) break;
+    before = batch.last().id;
+  }
+  messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+  const lines = ['FSMM TICKET TRANSCRIPT', `Channel: #${channel.name}`, `Ticket Type: ${typeLabel(ticketTypeFromTopic(channel.topic || ''))}`, `Created: ${new Date(channel.createdTimestamp).toISOString()}`, ''];
+  for (const message of messages) {
+    const text = message.content?.trim() || '[embed/component/attachment]';
+    const attachments = message.attachments.size ? ` | Attachments: ${[...message.attachments.values()].map((a) => a.url).join(', ')}` : '';
+    lines.push(`[${new Date(message.createdTimestamp).toISOString()}] ${message.author.tag}: ${text}${attachments}`);
+  }
+  return Buffer.from(lines.join('\n'), 'utf8');
+}
+async function sendTranscriptAndClose(channel, closer) {
+  const type = ticketTypeFromTopic(channel.topic || '');
+  const openerId = channel.topic?.match(/FSMM_USER:(\d+)/)?.[1] || null;
+  const claimedBy = claimedIdFromTopic(channel.topic || '');
+  const transcript = await fetchTranscript(channel);
+  const { logs } = await ensureRolesAndCategory(channel.guild);
+  const closeEmbed = embed('🔒 TICKET CLOSED', [
+    `**Ticket:** #${channel.name}`,
+    `**Type:** ${typeLabel(type)}`,
+    `**Opened by:** ${openerId ? `<@${openerId}>` : 'Unknown'}`,
+    `**Closed by:** <@${closer.id}>`,
+    `**Claimed by:** ${claimedBy ? `<@${claimedBy}>` : 'Unclaimed'}`,
+    `**Closed:** <t:${Math.floor(Date.now() / 1000)}:F>`,
+  ].join('\n'));
+  await logs.send({ embeds: [closeEmbed], files: [{ attachment: transcript, name: `${channel.name}-transcript.txt` }] });
+  await logs.send({ embeds: [embed('📄 TRANSCRIPT SENT', `Transcript for **#${channel.name}** was saved in mod logs.\n**Closed by:** <@${closer.id}>`)] });
+  await channel.delete('FSMM ticket closed by staff');
+  console.log(`[FSMM TICKETS] CLOSED + TRANSCRIPT ${channel.name} by ${closer.user.tag}`);
+}
 async function createTicket(interaction, type, data) {
   if (ticketCount(interaction.guild, interaction.user.id) >= MAX_OPEN_TICKETS) return interaction.reply({ content: `❌ You already have ${MAX_OPEN_TICKETS} open FSMM tickets. Close one before opening another.`, flags: MessageFlags.Ephemeral });
-  const { staff, mm, category } = await ensureRolesAndCategory(interaction.guild);
-  const typeLabel = type === 'middleman' ? 'Middleman' : type === 'support' ? 'Support' : 'Base Painting';
+  const { staff, mm, basePainter, category } = await ensureRolesAndCategory(interaction.guild);
+  const typeName = typeLabel(type);
   const slug = type === 'middleman' ? 'middleman' : type === 'support' ? 'support' : 'base-painting';
+  const teamRole = type === 'middleman' ? mm : type === 'base-painting' ? basePainter : staff;
   const channel = await interaction.guild.channels.create({
     name: `${slug}-${interaction.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 90) || `${slug}-${interaction.user.id}`,
     type: ChannelType.GuildText,
@@ -249,29 +319,31 @@ async function createTicket(interaction, type, data) {
       { id: interaction.guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
       { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
       { id: staff.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-      { id: mm.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+      { id: teamRole.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
     ],
-    reason: `FSMM ${typeLabel} ticket`,
+    reason: `FSMM ${typeName} ticket`,
   });
   const details = Object.entries(data).map(([key, value]) => `**${clean(key, 100)}:**\n${clean(value, 900)}`).join('\n\n');
-  const ticketEmbed = embed(`🎫 FSMM ${typeLabel.toUpperCase()} TICKET`, `Opened by <@${interaction.user.id}>\n\n${details}`);
-  await channel.send({ content: `<@${interaction.user.id}> <@&${staff.id}>`, allowedMentions: { users: [interaction.user.id], roles: [staff.id] }, embeds: [ticketEmbed], components: [closeButton()] });
+  const ticketEmbed = embed(`🎫 FSMM ${typeName.toUpperCase()} TICKET`, [
+    '**Status:** 🟢 OPEN',
+    `**Opened by:** <@${interaction.user.id}>`,
+    '', details, '',
+    'A team member can claim this ticket using **Claim Ticket**.',
+    'Only FSMM staff can close tickets.',
+  ].join('\n'));
+  await channel.send({ content: `<@${interaction.user.id}> <@&${teamRole.id}>`, allowedMentions: { users: [interaction.user.id], roles: [teamRole.id] }, embeds: [ticketEmbed], components: [ticketButtons(type)] });
+  await logEvent(interaction.guild, 'TICKET OPENED', [`**Ticket:** ${channel}`, `**Type:** ${typeName}`, `**Opened by:** <@${interaction.user.id}>`, `**Time:** <t:${Math.floor(Date.now() / 1000)}:F>`].join('\n'));
   return interaction.reply({ content: `✅ Your private ticket is ready: ${channel}`, flags: MessageFlags.Ephemeral });
 }
-
 function parseDuration(value) {
   const match = String(value).trim().match(/^(\d+)\s*(s|m|h|d)$/i);
   if (!match) return null;
-  const number = Number(match[1]);
-  const multiplier = { s: 1000, m: 60000, h: 3600000, d: 86400000 }[match[2].toLowerCase()];
-  const duration = number * multiplier;
+  const duration = Number(match[1]) * { s: 1000, m: 60000, h: 3600000, d: 86400000 }[match[2].toLowerCase()];
   return duration >= 10000 && duration <= 604800000 ? duration : null;
 }
-
 function giveawayButton(id) {
   return row(new ButtonBuilder().setCustomId(`fsmm_gw_join:${id}`).setLabel('Enter Giveaway').setEmoji('🎉').setStyle(ButtonStyle.Success));
 }
-
 async function finishGiveaway(id) {
   const giveaway = store.giveaways?.[id];
   if (!giveaway || giveaway.ended) return;
@@ -280,20 +352,14 @@ async function finishGiveaway(id) {
   if (!channel?.isTextBased()) return;
   const message = await channel.messages.fetch(giveaway.messageId).catch(() => null);
   if (!message) return;
-  const entries = Object.keys(giveaway.entries || {});
-  const pool = [...entries];
-  const winners = [];
-  for (let index = 0; index < Math.min(giveaway.winners, pool.length); index += 1) {
-    const winnerIndex = Math.floor(Math.random() * pool.length);
-    winners.push(pool.splice(winnerIndex, 1)[0]);
-  }
+  const entries = Object.keys(giveaway.entries || {}), pool = [...entries], winners = [];
+  for (let index = 0; index < Math.min(giveaway.winners, pool.length); index += 1) winners.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
   const winnerText = winners.length ? winners.map((idValue) => `<@${idValue}>`).join(', ') : 'No valid entries';
   const resultEmbed = embed('🎉 GIVEAWAY ENDED', `**Prize:** ${clean(giveaway.prize, 200)}\n**Winner${winners.length === 1 ? '' : 's'}:** ${winnerText}\n\nEntries: **${entries.length}**`);
   if (giveaway.image) resultEmbed.setImage(giveaway.image);
   await message.edit({ embeds: [resultEmbed], components: [] }).catch(() => null);
   saveStore();
 }
-
 function scheduleGiveaways() {
   for (const [id, giveaway] of Object.entries(store.giveaways || {})) {
     if (giveaway.ended) continue;
@@ -306,8 +372,8 @@ const commands = [
   new SlashCommandBuilder().setName('ping').setDescription('Show bot latency.'),
   new SlashCommandBuilder().setName('help').setDescription('Show FSMM bot commands.'),
   new SlashCommandBuilder().setName('membercount').setDescription('Show server member count.'),
-  new SlashCommandBuilder().setName('setup').setDescription('Owner-only: factory reset and sync the 3 FSMM service panels.'),
-  new SlashCommandBuilder().setName('ticket').setDescription('Owner-only: sync the 3 FSMM service panels.'),
+  new SlashCommandBuilder().setName('setup').setDescription('Owner-only: sync the 3 FSMM service panels and ticket roles.'),
+  new SlashCommandBuilder().setName('ticket').setDescription('Owner-only: sync the 3 FSMM service panels and ticket roles.'),
   new SlashCommandBuilder().setName('giveaway').setDescription('Staff-only: start an FSMM giveaway.')
     .addStringOption((option) => option.setName('duration').setDescription('Duration: 10s, 10m, 1h, or 1d').setRequired(true))
     .addIntegerOption((option) => option.setName('winners').setDescription('Number of winners').setMinValue(1).setMaxValue(20).setRequired(true))
@@ -335,13 +401,13 @@ client.on('interactionCreate', async (interaction) => {
   try {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'ping') return interaction.reply({ content: `🏓 Pong! ${client.ws.ping}ms`, flags: MessageFlags.Ephemeral });
-      if (interaction.commandName === 'help') return interaction.reply({ embeds: [embed('🤖 FSMM BOT COMMANDS', '`/setup` — factory reset + sync panels\n`/ticket` — sync panels\n`/giveaway` — start a giveaway\n`/ping` — bot latency\n`/membercount` — server members')], flags: MessageFlags.Ephemeral });
+      if (interaction.commandName === 'help') return interaction.reply({ embeds: [embed('🤖 FSMM COMMANDS', ['**🎫 Tickets**','`/ticket` — sync the three service panels','','**🛡️ Staff**','`/giveaway` — start a giveaway','`/ticketstats` — ticket overview','`/transcript` — create a transcript manually','`/modlogs` — view moderation logs','','**📊 Community**','`/vouch` `/vouches` `/leaderboard`','`/stats` `/profile` `/activity` `/topmembers`','','**🔧 Moderation**','`/warn` `/warnings` `/unwarn` `/clear`','`/ban` `/unban` `/kick` `/timeout` `/untimeout`','`/lock` `/unlock` `/slowmode` `/nick` `/role`','','**⚙️ Utilities**','`/serverinfo` `/userinfo` `/avatar` `/servericon`','`/roleinfo` `/channelinfo` `/botinfo`','`/ping` `/membercount`'].join('\n'))], flags: MessageFlags.Ephemeral });
       if (interaction.commandName === 'membercount') return interaction.reply({ content: `👥 Members: **${interaction.guild.memberCount}**`, flags: MessageFlags.Ephemeral });
       if (interaction.commandName === 'setup' || interaction.commandName === 'ticket') {
         if (!isOwner(interaction)) return interaction.reply({ content: '❌ Owner only.', flags: MessageFlags.Ephemeral });
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         await syncPanels(interaction.guild);
-        return interaction.editReply('✅ FSMM panels synced successfully.');
+        return interaction.editReply('✅ FSMM panels and ticket roles are synced.');
       }
       if (interaction.commandName === 'giveaway') {
         if (!isStaff(interaction)) return interaction.reply({ content: '❌ Staff only.', flags: MessageFlags.Ephemeral });
@@ -380,12 +446,30 @@ client.on('interactionCreate', async (interaction) => {
         if (!BASES.includes(base)) return interaction.reply({ content: '❌ Invalid base.', flags: MessageFlags.Ephemeral });
         return interaction.showModal(paintModal(base));
       }
+      if (interaction.customId === 'fsmm_claim') {
+        const channel = interaction.channel;
+        const topic = channel?.topic || '';
+        const type = ticketTypeFromTopic(topic);
+        if (!['middleman', 'support', 'base-painting'].includes(type)) return interaction.reply({ content: '❌ This is not an FSMM ticket.', flags: MessageFlags.Ephemeral });
+        if (!claimAllowed(interaction, type)) return interaction.reply({ content: '❌ You are not part of the team allowed to claim this ticket.', flags: MessageFlags.Ephemeral });
+        const existingClaim = claimedIdFromTopic(topic);
+        if (existingClaim) return interaction.reply({ content: `❌ This ticket is already claimed by <@${existingClaim}>.`, flags: MessageFlags.Ephemeral });
+        await channel.setTopic(`${topic} CLAIMED_BY:${interaction.user.id}`);
+        const currentEmbed = interaction.message.embeds[0] ? EmbedBuilder.from(interaction.message.embeds[0]) : embed('🎫 FSMM TICKET', '');
+        const oldDescription = currentEmbed.data.description || '';
+        currentEmbed.setDescription(oldDescription.replace('**Status:** 🟢 OPEN', '**Status:** 🟡 CLAIMED') + `\n\n**Claimed by:** <@${interaction.user.id}>`);
+        await interaction.message.edit({ embeds: [currentEmbed], components: [ticketButtons(type, interaction.user.id)] });
+        await logEvent(interaction.guild, 'TICKET CLAIMED', [`**Ticket:** ${channel}`, `**Type:** ${typeLabel(type)}`, `**Claimed by:** <@${interaction.user.id}>`, `**Time:** <t:${Math.floor(Date.now() / 1000)}:F>`].join('\n'));
+        return interaction.reply({ content: `✅ You claimed **${typeLabel(type)}** ticket.`, flags: MessageFlags.Ephemeral });
+      }
       if (interaction.customId === 'fsmm_close') {
         const channel = interaction.channel;
-        const canClose = isStaff(interaction) || channel?.topic?.includes(`FSMM_USER:${interaction.user.id}`);
-        if (!canClose) return interaction.reply({ content: '❌ Only the ticket owner or FSMM staff can close this ticket.', flags: MessageFlags.Ephemeral });
-        await interaction.reply({ content: '🔒 Closing ticket...', flags: MessageFlags.Ephemeral });
-        return channel.delete('FSMM ticket closed');
+        const type = ticketTypeFromTopic(channel?.topic || '');
+        if (!['middleman', 'support', 'base-painting'].includes(type)) return interaction.reply({ content: '❌ This is not an FSMM ticket.', flags: MessageFlags.Ephemeral });
+        if (!isStaff(interaction)) return interaction.reply({ content: '❌ Only **FSMM Staff / Owners** can close tickets.', flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: '🔒 Creating transcript and closing ticket...', flags: MessageFlags.Ephemeral });
+        await sendTranscriptAndClose(channel, interaction.member);
+        return;
       }
       if (interaction.customId.startsWith('fsmm_gw_join:')) {
         const id = interaction.customId.slice('fsmm_gw_join:'.length);
@@ -429,6 +513,7 @@ client.once('ready', async () => {
     await registerCommands();
     if (client.guilds.cache.has(GUILD_ID)) await syncPanels(client.guilds.cache.get(GUILD_ID));
     scheduleGiveaways();
+    console.log('[FSMM] TICKET HANDLERS READY: claim + staff-close + auto-transcript + mod-logs');
     console.log('[FSMM] STARTUP SYNC COMPLETE');
   } catch (error) {
     console.error('[FSMM STARTUP] Sync failed:', error.stack || error.message);
