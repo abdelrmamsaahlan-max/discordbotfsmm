@@ -1,11 +1,12 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
 const {
   Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder,
   PermissionFlagsBits, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder,
   ButtonStyle, ChannelType, ModalBuilder, TextInputBuilder, TextInputStyle,
-  MessageFlags,
+  MessageFlags, AttachmentBuilder,
 } = require('discord.js');
 
 const TOKEN = process.env.DISCORD_TOKEN;
@@ -13,7 +14,7 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 if (!TOKEN || !CLIENT_ID || !GUILD_ID) throw new Error('Missing required environment variables: DISCORD_TOKEN, CLIENT_ID, GUILD_ID');
 
-const VERSION = '12.1.0';
+const VERSION = '12.2.0';
 const ROLE_IDS = Object.freeze({
   owner: '1466090947170406617',
   mod: '1466085137459712114',
@@ -27,9 +28,8 @@ const LOG_CHANNEL_NAME = 'fsmm-logs';
 const MAX_OPEN_TICKETS = 3;
 const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, '..', 'data', 'store.json');
 
-const BASES = ['Candy', 'Lava', 'Galaxy', 'Yin Yang', 'Radioactive', 'Cursed', 'Divine', 'Cyber', 'Phantom', 'Crystal'];
-const BASE_EMOJIS = { Candy:'🍬', Lava:'🌋', Galaxy:'🌌', 'Yin Yang':'☯️', Radioactive:'☢️', Cursed:'😈', Divine:'✨', Cyber:'🤖', Phantom:'👻', Crystal:'💎' };
-const BASE_FILES = { Candy:'Candy_Base.png', Lava:'Lava_Base.png', Galaxy:'Galaxy_Base.png', 'Yin Yang':'Yin_Yang_Base.png', Radioactive:'Radioactive_Base.png', Cursed:'Cursed_Base.png', Divine:'Divine_Base.png', Cyber:'Cyber_Base.png', Phantom:'Phantom_Base.png', Crystal:'Crystal_Base.png' };
+const BASES = ['Candy', 'Lava', 'Galaxy', 'Yin Yang', 'Radioactive', 'Cursed', 'Divine', 'Cyber', 'Phantom'];
+const BASE_EMOJIS = { Candy:'🍬', Lava:'🌋', Galaxy:'🌌', 'Yin Yang':'☯️', Radioactive:'☢️', Cursed:'😈', Divine:'✨', Cyber:'🤖', Phantom:'👻' };
 const MM_VALUES = [
   ['10M - 250M','Trades from 10M to 250M','💰'], ['250M - 500M','Trades from 250M to 500M','💵'],
   ['500M - 1B','Trades from 500M to 1B','💎'], ['1B - 5B','Trades from 1B to 5B','🔥'],
@@ -43,6 +43,7 @@ const SUPPORT_VALUES = [
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
 const creationLocks = new Set();
 const claimLocks = new Set();
+const baseImageCache = new Map();
 
 const clean = (value, max = 900) => String(value ?? '').replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/@everyone|@here/gi, '@ mention').trim().slice(0, max) || 'Not provided';
 const embed = (title, description) => new EmbedBuilder().setTitle(title).setDescription(description).setColor(0x5865f2).setFooter({ text: 'FSMM' });
@@ -123,8 +124,51 @@ function input(id, label, style = TextInputStyle.Short, required = true, max = 9
 function mmModal(value) { return new ModalBuilder().setCustomId(`fsmm_mm_modal:${encodeURIComponent(value)}`).setTitle('FSMM Middleman Request').addComponents(row(input('giving','What are YOU giving?',TextInputStyle.Paragraph)),row(input('receiving','What is the OTHER TRADER giving?',TextInputStyle.Paragraph)),row(input('other','Other trader username',TextInputStyle.Short,true,100,'@username')),row(input('tip','What are you tipping?',TextInputStyle.Short,false,300,'Optional'))); }
 function supportModal(kind) { const name = Object.fromEntries(SUPPORT_VALUES.map(([label,value]) => [value,label]))[kind] || 'FSMM Support'; return new ModalBuilder().setCustomId(`fsmm_support_modal:${kind}`).setTitle(name).addComponents(row(input('details',kind === 'role_apply' ? 'Why should we accept your application?' : 'Tell us what you need',TextInputStyle.Paragraph)),row(input('roblox','Roblox username',TextInputStyle.Short,false,100,'Optional'))); }
 function paintModal(base) { return new ModalBuilder().setCustomId(`fsmm_paint_modal:${encodeURIComponent(base)}`).setTitle(`${base} Base Painting`).addComponents(row(input('roblox','Roblox username')),row(input('payment','What is your payment?',TextInputStyle.Paragraph,true,500)),row(input('collateral','What is your collateral?',TextInputStyle.Paragraph,true,500)),row(input('extra','Extra details',TextInputStyle.Paragraph,false,900,'Optional'))); }
-function baseImage(base) { return `https://stealabrainrot.fandom.com/wiki/Special:Redirect/file/${encodeURIComponent(BASE_FILES[base])}`; }
-function basePreview(base) { return embed(`${BASE_EMOJIS[base] || '🎨'} ${base} BASE PREVIEW`, `**Base:** ${base}\n\nIf this is the base you want painted, press **Continue to Request** below.`).setImage(baseImage(base)); }
+
+// Fandom changed/redirected file names several times. Resolve the current image through
+// the wiki's own MediaWiki API instead of guessing a filename. The image is then uploaded
+// to Discord as an attachment, so the preview does not depend on Fandom hotlink redirects.
+function httpGet(url, redirects = 3) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, { headers: { 'User-Agent': 'FSMM-Discord-Bot/12.2 (base-preview)' } }, res => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects > 0) {
+        res.resume();
+        const next = new URL(res.headers.location, url).toString();
+        return resolve(httpGet(next, redirects - 1));
+      }
+      if (res.statusCode !== 200) { res.resume(); return reject(new Error(`HTTP ${res.statusCode}`)); }
+      const chunks = []; res.on('data', c => chunks.push(c)); res.on('end', () => resolve({ body: Buffer.concat(chunks), contentType: res.headers['content-type'] || '' }));
+    });
+    req.setTimeout(12000, () => req.destroy(new Error('request timeout')));
+    req.on('error', reject);
+  });
+}
+async function resolveFandomBase(base) {
+  if (baseImageCache.has(base)) return baseImageCache.get(base);
+  const api = `https://stealabrainrot.fandom.com/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(`${base} Base`)}&gsrnamespace=6&gsrlimit=10&prop=imageinfo&iiprop=url&format=json&origin=*`;
+  const result = await httpGet(api);
+  const json = JSON.parse(result.body.toString('utf8'));
+  const pages = Object.values(json.query?.pages || {});
+  const wanted = base.toLowerCase().replace(/\s+/g, '');
+  const page = pages.find(p => String(p.title || '').toLowerCase().replace(/[^a-z0-9]+/g, '').includes(wanted + 'base')) || pages[0];
+  const url = page?.imageinfo?.[0]?.url;
+  if (!url) throw new Error(`No Fandom image found for ${base}`);
+  baseImageCache.set(base, url);
+  return url;
+}
+async function basePreview(base) {
+  try {
+    const imageUrl = await resolveFandomBase(base);
+    const image = await httpGet(imageUrl);
+    const ext = (image.contentType.match(/image\/(png|jpe?g|webp|gif)/i)?.[1] || 'png').replace('jpeg','jpg');
+    const file = new AttachmentBuilder(image.body, { name: `fsmm-${base.toLowerCase().replace(/[^a-z0-9]+/g,'-')}.${ext}` });
+    const e = embed(`${BASE_EMOJIS[base] || '🎨'} ${base} BASE PREVIEW`, `**Base:** ${base}\n\nIf this is the base you want painted, press **Continue to Request** below.`).setImage(`attachment://${file.name}`);
+    return { embeds: [e], files: [file] };
+  } catch (e) {
+    console.error(`[FSMM BASE PREVIEW] ${base}:`, e.message);
+    return { embeds: [embed(`${BASE_EMOJIS[base] || '🎨'} ${base} BASE PREVIEW`, `**Base:** ${base}\n\n⚠️ The official Fandom image could not be loaded right now. You can still continue with the request.`)] };
+  }
+}
 function baseContinue(base) { return row(new ButtonBuilder().setCustomId(`fsmm_base_continue:${encodeURIComponent(base)}`).setLabel('Continue to Request').setEmoji('🎨').setStyle(ButtonStyle.Primary)); }
 function ticketButtons(claimed) { return row(new ButtonBuilder().setCustomId('fsmm_claim').setLabel(claimed ? 'Ticket Claimed' : 'Claim Ticket').setEmoji(claimed ? '✅' : '🙋').setStyle(claimed ? ButtonStyle.Secondary : ButtonStyle.Primary).setDisabled(Boolean(claimed)), new ButtonBuilder().setCustomId('fsmm_close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger)); }
 
@@ -149,77 +193,108 @@ async function createTicket(i, type, data) {
     return i.reply({ content:`✅ Your private ticket is ready: ${channel}`, flags:MessageFlags.Ephemeral });
   } catch (e) {
     console.error('[FSMM TICKET CREATE]', e.stack || e.message);
-    if (!i.replied && !i.deferred) return i.reply({ content:'❌ We could not create the ticket. Please try again.', flags:MessageFlags.Ephemeral });
+    if (!i.replied && !i.deferred) return i.reply({ content:'❌ Could not create the ticket. Please try again.', flags:MessageFlags.Ephemeral });
   } finally { creationLocks.delete(i.user.id); }
 }
-async function fetchTranscript(channel) {
-  const messages=[]; let before;
-  while(true){ const batch=await channel.messages.fetch({limit:100,...(before?{before}:{})}); if(!batch.size)break; messages.push(...batch.values()); if(batch.size<100)break; before=batch.last().id; }
-  messages.sort((a,b)=>a.createdTimestamp-b.createdTimestamp);
-  const lines=['FSMM TICKET TRANSCRIPT',`Channel: #${channel.name}`,`Type: ${typeLabel(ticketType(channel.topic||''))}`,`Created: ${new Date(channel.createdTimestamp).toISOString()}`,''];
-  for(const m of messages){const text=m.content?.trim()||'[embed/component/attachment]';const attachments=m.attachments.size?` | Attachments: ${[...m.attachments.values()].map(a=>a.url).join(', ')}`:'';lines.push(`[${new Date(m.createdTimestamp).toISOString()}] ${m.author.tag}: ${text}${attachments}`);}
-  return Buffer.from(lines.join('\n'),'utf8');
+
+async function closeTicket(i) {
+  if (!isStaff(i)) return i.reply({ content:'❌ Only FSMM staff can close tickets.', flags:MessageFlags.Ephemeral });
+  const topic = i.channel?.topic || ''; if (!topic.includes('FSMM_USER:')) return i.reply({ content:'❌ This is not an FSMM ticket.', flags:MessageFlags.Ephemeral });
+  await i.deferReply({ flags: MessageFlags.Ephemeral });
+  try {
+    const messages = await i.channel.messages.fetch({ limit: 100 });
+    const lines = [...messages.values()].reverse().map(m => `[${m.createdAt.toISOString()}] ${m.author.tag}: ${clean(m.content, 1000)}`).join('\n');
+    const file = Buffer.from(lines || 'No messages.', 'utf8');
+    const name = `transcript-${i.channel.name}-${Date.now()}.txt`;
+    const logs = (await ensureRolesAndCategory(i.guild)).logs;
+    await logs.send({ content:`🔒 **Ticket closed:** ${i.channel.name}\n**Closed by:** <@${i.user.id}>`, files:[new AttachmentBuilder(file,{name})] });
+    await i.editReply({ content:'✅ Ticket closed and transcript saved.' });
+    await logEvent(i.guild,'TICKET CLOSED',`**Ticket:** ${i.channel.name}\n**Closed by:** <@${i.user.id}>`);
+    setTimeout(() => i.channel.delete('FSMM ticket closed').catch(()=>{}), 1200);
+  } catch (e) { console.error('[FSMM CLOSE]', e.stack || e.message); await i.editReply({ content:'❌ Could not close this ticket cleanly.' }); }
 }
-async function closeTicket(channel, closer) {
-  const transcript=await fetchTranscript(channel); const roles=await ensureRolesAndCategory(channel.guild); const opener=openerId(channel.topic||''); const claimer=claimedId(channel.topic||'');
-  await roles.logs.send({embeds:[embed('🔒 TICKET CLOSED',[`**Ticket:** #${channel.name}`,`**Type:** ${typeLabel(ticketType(channel.topic||''))}`,`**Opened by:** ${opener?`<@${opener}>`:'Unknown'}`,`**Closed by:** <@${closer.id}>`,`**Claimed by:** ${claimer?`<@${claimer}>`:'Unclaimed'}`].join('\n'))],files:[{attachment:transcript,name:`${channel.name}-transcript.txt`}]});
-  await channel.delete('FSMM ticket closed by staff');
+
+async function claimTicket(i) {
+  if (!isStaff(i)) return i.reply({ content:'❌ Only FSMM staff can claim tickets.', flags:MessageFlags.Ephemeral });
+  const topic = i.channel?.topic || ''; if (!topic.includes('FSMM_USER:')) return i.reply({ content:'❌ This is not an FSMM ticket.', flags:MessageFlags.Ephemeral });
+  if (claimedId(topic)) return i.reply({ content:'❌ This ticket is already claimed.', flags:MessageFlags.Ephemeral });
+  const key = i.channel.id; if (claimLocks.has(key)) return i.reply({ content:'⏳ Claim is already being processed.', flags:MessageFlags.Ephemeral });
+  claimLocks.add(key);
+  try {
+    const newTopic = `${topic} CLAIMED_BY:${i.user.id}`;
+    await i.channel.setTopic(newTopic, 'FSMM ticket claimed');
+    await i.channel.permissionOverwrites.edit(i.user.id, { ViewChannel:true, SendMessages:true, ReadMessageHistory:true });
+    await i.update({ components:[ticketButtons(i.user.id)] });
+    await i.channel.send({ content:`🔒 **Claimed by <@${i.user.id}>**`, allowedMentions:{users:[i.user.id]} });
+  } catch (e) { console.error('[FSMM CLAIM]', e.stack || e.message); if (!i.replied && !i.deferred) await i.reply({ content:'❌ Could not claim this ticket.', flags:MessageFlags.Ephemeral }); }
+  finally { claimLocks.delete(key); }
 }
 
 const coreCommands = [
-  new SlashCommandBuilder().setName('ping').setDescription('Show bot latency.'),
-  new SlashCommandBuilder().setName('help').setDescription('Show FSMM bot commands.'),
-  new SlashCommandBuilder().setName('membercount').setDescription('Show server member count.'),
-  new SlashCommandBuilder().setName('setup').setDescription('Owner-only: sync the 3 FSMM service panels.'),
-  new SlashCommandBuilder().setName('ticket').setDescription('Owner-only: sync the 3 FSMM service panels.'),
-].map(c => c.toJSON());
-async function registerCoreCommands(){const rest=new REST({version:'10'}).setToken(TOKEN);const route=Routes.applicationGuildCommands(CLIENT_ID,GUILD_ID);const existing=await rest.get(route);const names=new Set(coreCommands.map(c=>c.name));const merged=[...existing.filter(c=>!names.has(c.name)),...coreCommands];await rest.put(route,{body:merged});const verified=await rest.get(route);const missing=coreCommands.filter(c=>!verified.some(v=>v.name===c.name));if(missing.length)throw new Error(`Core command verification failed: ${missing.map(c=>c.name).join(', ')}`);console.log(`[FSMM COMMANDS] CORE VERIFIED ${coreCommands.length}/${coreCommands.length}`);}
+  new SlashCommandBuilder().setName('ping').setDescription('Check FSMM bot latency'),
+  new SlashCommandBuilder().setName('help').setDescription('Show FSMM commands and services'),
+  new SlashCommandBuilder().setName('membercount').setDescription('Show server member count'),
+  new SlashCommandBuilder().setName('setup').setDescription('Set up FSMM service panels').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+  new SlashCommandBuilder().setName('ticket').setDescription('Show FSMM service panels').setDefaultMemberPermissions(PermissionFlagsBits.SendMessages),
+].map(c=>c.toJSON());
+
+async function registerCore() {
+  const rest = new REST({ version:'10' }).setToken(TOKEN);
+  const route = Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID);
+  const existing = await rest.get(route);
+  const enhanced = Array.isArray(existing) ? existing.filter(c => !coreCommands.some(x => x.name === c.name)) : [];
+  const merged = [...enhanced, ...coreCommands];
+  await rest.put(route, { body: merged });
+  const verify = await rest.get(route);
+  console.log(`[FSMM COMMANDS] CORE VERIFIED ${verify.filter(c=>coreCommands.some(x=>x.name===c.name)).length}/5`);
+}
+
+client.once('clientReady', async () => {
+  console.log(`[FSMM ${VERSION}] ONLINE AS ${client.user.tag}`);
+  client.user.setPresence({ activities:[{name:'FSMM • Services',type:3}], status:'online' });
+  try { await registerCore(); await syncPanels(client.guilds.cache.get(GUILD_ID)); console.log('[FSMM] STARTUP SYNC COMPLETE'); }
+  catch (e) { console.error('[FSMM STARTUP]', e.stack || e.message); }
+});
 
 client.on('interactionCreate', async i => {
   try {
-    if (!i.guild) return;
     if (i.replied || i.deferred) return;
     if (i.isChatInputCommand()) {
-      if (i.commandName === 'ping') return i.reply({content:`🏓 Pong! ${client.ws.ping}ms`,flags:MessageFlags.Ephemeral});
-      if (i.commandName === 'help') return i.reply({embeds:[embed('🤖 FSMM BOT','🎫 Three private service systems: Middleman, Support and Base Painting.\n\nUse `/ticket` to sync the service panels.\n\nStaff/community commands are available through their slash commands.')],flags:MessageFlags.Ephemeral});
-      if (i.commandName === 'membercount') return i.reply({content:`👥 Members: **${i.guild.memberCount}**`,flags:MessageFlags.Ephemeral});
-      if (i.commandName === 'setup' || i.commandName === 'ticket') { if(!isOwner(i))return i.reply({content:'❌ Owner only.',flags:MessageFlags.Ephemeral}); await i.deferReply({flags:MessageFlags.Ephemeral}); await syncPanels(i.guild); return i.editReply('✅ FSMM panels and ticket roles are synced.'); }
+      if (i.commandName === 'ping') return i.reply({ content:`🏓 Pong! ${client.ws.ping}ms`, flags:MessageFlags.Ephemeral });
+      if (i.commandName === 'help') return i.reply({ embeds:[embed('FSMM COMMANDS','Core: `/ping` `/help` `/membercount` `/setup` `/ticket`\nServices: Middleman • Support • Base Painting\nEnhanced moderation, vouches, stats and giveaways are also available.')], flags:MessageFlags.Ephemeral });
+      if (i.commandName === 'membercount') return i.reply({ content:`👥 **${i.guild.memberCount}** members`, flags:MessageFlags.Ephemeral });
+      if (i.commandName === 'setup' || i.commandName === 'ticket') { if (i.commandName === 'setup' && !isStaff(i)) return i.reply({ content:'❌ Staff only.', flags:MessageFlags.Ephemeral }); await syncPanels(i.guild); return i.reply({ content:'✅ FSMM service panels are synced.', flags:MessageFlags.Ephemeral }); }
       return;
     }
     if (i.isStringSelectMenu()) {
       if (i.customId === 'fsmm_mm_pick') return i.showModal(mmModal(i.values[0]));
       if (i.customId === 'fsmm_support_pick') return i.showModal(supportModal(i.values[0]));
-      if (i.customId === 'fsmm_base_pick') { const base=i.values[0]; if(!BASES.includes(base))return i.reply({content:'❌ Invalid base.',flags:MessageFlags.Ephemeral}); return i.reply({embeds:[basePreview(base)],components:[baseContinue(base)],flags:MessageFlags.Ephemeral}); }
+      if (i.customId === 'fsmm_base_pick') {
+        const base = i.values[0];
+        const preview = await basePreview(base);
+        return i.reply({ ...preview, components:[baseContinue(base)], flags:MessageFlags.Ephemeral });
+      }
       return;
     }
     if (i.isButton()) {
-      if (i.customId.startsWith('fsmm_base_continue:')) { const base=decodeURIComponent(i.customId.slice('fsmm_base_continue:'.length)); if(!BASES.includes(base))return i.reply({content:'❌ Invalid base.',flags:MessageFlags.Ephemeral}); return i.showModal(paintModal(base)); }
-      if (i.customId === 'fsmm_claim') {
-        const ch=i.channel,type=ticketType(ch?.topic||''); if(!['middleman','support','base-painting'].includes(type))return i.reply({content:'❌ This is not an FSMM ticket.',flags:MessageFlags.Ephemeral});
-        const allowed=isStaff(i)|| (type==='middleman'&&roleHas(i,ROLE_IDS.middleman)) || (type==='base-painting'&&roleHas(i,ROLE_IDS.indexProvider));
-        if(!allowed)return i.reply({content:'❌ You are not allowed to claim this ticket.',flags:MessageFlags.Ephemeral});
-        if(claimedId(ch.topic||''))return i.reply({content:'❌ This ticket is already claimed.',flags:MessageFlags.Ephemeral});
-        if(claimLocks.has(ch.id))return i.reply({content:'⏳ This ticket is already being claimed.',flags:MessageFlags.Ephemeral});
-        claimLocks.add(ch.id);
-        try { await ch.setTopic(`${ch.topic} CLAIMED_BY:${i.user.id}`.slice(0,1024)); const e=i.message.embeds[0]?EmbedBuilder.from(i.message.embeds[0]):embed('🎫 FSMM TICKET',''); e.setDescription((e.data.description||'').replace('**Status:** 🟢 OPEN','**Status:** 🟡 CLAIMED')+`\n\n**Claimed by:** <@${i.user.id}>`); await i.message.edit({embeds:[e],components:[ticketButtons(i.user.id)]}); await logEvent(i.guild,'TICKET CLAIMED',`**Ticket:** ${ch}\n**Claimed by:** <@${i.user.id}>`); return i.reply({content:'✅ Ticket claimed.',flags:MessageFlags.Ephemeral}); } finally { claimLocks.delete(ch.id); }
-      }
-      if (i.customId === 'fsmm_close') { const ch=i.channel,type=ticketType(ch?.topic||''); if(!['middleman','support','base-painting'].includes(type))return i.reply({content:'❌ This is not an FSMM ticket.',flags:MessageFlags.Ephemeral}); if(!isStaff(i))return i.reply({content:'❌ Only FSMM Staff / Owners can close tickets.',flags:MessageFlags.Ephemeral}); await i.reply({content:'🔒 Creating transcript and closing ticket...',flags:MessageFlags.Ephemeral}); return closeTicket(ch,i.member); }
+      if (i.customId === 'fsmm_claim') return claimTicket(i);
+      if (i.customId === 'fsmm_close') return closeTicket(i);
+      if (i.customId.startsWith('fsmm_base_continue:')) return i.showModal(paintModal(decodeURIComponent(i.customId.split(':')[1])));
       return;
     }
     if (i.isModalSubmit()) {
-      if (i.customId.startsWith('fsmm_mm_modal:')) { const value=decodeURIComponent(i.customId.slice('fsmm_mm_modal:'.length)); return createTicket(i,'middleman',{'Trade value':value,'What YOU are giving':i.fields.getTextInputValue('giving'),'What the OTHER TRADER is giving':i.fields.getTextInputValue('receiving'),'Other trader username':i.fields.getTextInputValue('other'),'Tip':i.fields.getTextInputValue('tip')||'Not provided'}); }
-      if (i.customId.startsWith('fsmm_support_modal:')) { const kind=i.customId.slice('fsmm_support_modal:'.length); return createTicket(i,'support',{'Support type':kind,Details:i.fields.getTextInputValue('details'),'Roblox username':i.fields.getTextInputValue('roblox')||'Not provided'}); }
-      if (i.customId.startsWith('fsmm_paint_modal:')) { const base=decodeURIComponent(i.customId.slice('fsmm_paint_modal:'.length)); if(!BASES.includes(base))return i.reply({content:'❌ Invalid base.',flags:MessageFlags.Ephemeral}); return createTicket(i,'base-painting',{Base:base,'Roblox username':i.fields.getTextInputValue('roblox'),Payment:i.fields.getTextInputValue('payment'),Collateral:i.fields.getTextInputValue('collateral'),'Extra details':i.fields.getTextInputValue('extra')||'Not provided'}); }
+      if (i.customId.startsWith('fsmm_mm_modal:')) return createTicket(i,'middleman',{ 'Trade value':decodeURIComponent(i.customId.split(':')[1]), 'What YOU are giving':i.fields.getTextInputValue('giving'), 'What the OTHER TRADER is giving':i.fields.getTextInputValue('receiving'), 'Other trader username':i.fields.getTextInputValue('other'), 'Tip':i.fields.getTextInputValue('tip') });
+      if (i.customId.startsWith('fsmm_support_modal:')) return createTicket(i,'support',{ 'Support type':Object.fromEntries(SUPPORT_VALUES.map(([label,value])=>[value,label]))[i.customId.split(':')[1]] || 'Support', 'Details':i.fields.getTextInputValue('details'), 'Roblox username':i.fields.getTextInputValue('roblox') });
+      if (i.customId.startsWith('fsmm_paint_modal:')) return createTicket(i,'base-painting',{ 'Base':decodeURIComponent(i.customId.split(':')[1]), 'Roblox username':i.fields.getTextInputValue('roblox'), 'Payment':i.fields.getTextInputValue('payment'), 'Collateral':i.fields.getTextInputValue('collateral'), 'Extra details':i.fields.getTextInputValue('extra') });
     }
-  } catch(e) { console.error('[FSMM ERROR]',e.stack||e.message); if(i.isRepliable()&&!i.replied&&!i.deferred)await i.reply({content:'❌ Something went wrong. Please try again.',flags:MessageFlags.Ephemeral}).catch(()=>{}); }
+  } catch (e) {
+    console.error('[FSMM INTERACTION]', e.stack || e.message);
+    try { if (!i.replied && !i.deferred) await i.reply({ content:'❌ Something went wrong. Please try again.', flags:MessageFlags.Ephemeral }); }
+    catch {}
+  }
 });
 
-client.once('clientReady', async () => {
-  console.log(`[FSMM ${VERSION}] ONLINE AS ${client.user.tag}`);
-  try { await registerCoreCommands(); if(client.guilds.cache.has(GUILD_ID)) await syncPanels(client.guilds.cache.get(GUILD_ID)); console.log('[FSMM] STARTUP SYNC COMPLETE'); }
-  catch(e) { console.error('[FSMM STARTUP]',e.stack||e.message); }
-});
+process.on('unhandledRejection', e => console.error('[FSMM UNHANDLED]', e));
+process.on('uncaughtException', e => console.error('[FSMM UNCAUGHT]', e));
 
-process.on('unhandledRejection', e => console.error('[FSMM UNHANDLED REJECTION]', e?.stack || e));
-process.on('uncaughtException', e => console.error('[FSMM UNCAUGHT EXCEPTION]', e?.stack || e));
-client.login(TOKEN).catch(e => { console.error('[FSMM LOGIN]',e.stack||e.message); process.exit(1); });
+client.login(TOKEN).catch(e => { console.error('[FSMM LOGIN]', e); process.exitCode = 1; });
