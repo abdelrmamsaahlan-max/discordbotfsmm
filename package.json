@@ -1,10 +1,10 @@
 {
   "name": "fsmm-discord-bot",
-  "version": "11.1.0",
-  "description": "FSMM Discord service ticket, giveaway, utility and staff bot — Railway-ready",
+  "version": "12.0.0",
+  "description": "FSMM Discord service, ticket, moderation, community and giveaway bot",
   "main": "src/index.js",
   "scripts": {
-    "start": "node -r ./src/final-enhancements.js -r ./src/ready-fix.js -r ./src/role-fix.js -r ./src/clean-ui.js -r ./src/v9-register.js -r ./src/extra-commands.js -r ./src/visual-fixes.js src/index.js"
+    "start": "node -r ./src/extra-commands.js -r ./src/role-fix.js src/index.js"
   },
   "engines": {
     "node": ">=20"
