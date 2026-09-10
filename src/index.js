@@ -14,7 +14,7 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 if (!TOKEN || !CLIENT_ID || !GUILD_ID) throw new Error('Missing required environment variables: DISCORD_TOKEN, CLIENT_ID, GUILD_ID');
 
-const VERSION = '12.2.0';
+const VERSION = '12.2.1';
 const ROLE_IDS = Object.freeze({
   owner: '1466090947170406617',
   mod: '1466085137459712114',
@@ -28,8 +28,8 @@ const LOG_CHANNEL_NAME = 'fsmm-logs';
 const MAX_OPEN_TICKETS = 3;
 const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, '..', 'data', 'store.json');
 
-const BASES = ['Candy', 'Lava', 'Galaxy', 'Yin Yang', 'Radioactive', 'Cursed', 'Divine', 'Cyber', 'Phantom'];
-const BASE_EMOJIS = { Candy:'🍬', Lava:'🌋', Galaxy:'🌌', 'Yin Yang':'☯️', Radioactive:'☢️', Cursed:'😈', Divine:'✨', Cyber:'🤖', Phantom:'👻' };
+const BASES = ['Candy', 'Lava', 'Galaxy', 'Yin Yang', 'Radioactive', 'Cursed', 'Divine', 'Cyber', 'Phantom', 'Crystal'];
+const BASE_EMOJIS = { Candy:'🍬', Lava:'🌋', Galaxy:'🌌', 'Yin Yang':'☯️', Radioactive:'☢️', Cursed:'😈', Divine:'✨', Cyber:'🤖', Phantom:'👻', Crystal:'💎' };
 const MM_VALUES = [
   ['10M - 250M','Trades from 10M to 250M','💰'], ['250M - 500M','Trades from 250M to 500M','💵'],
   ['500M - 1B','Trades from 500M to 1B','💎'], ['1B - 5B','Trades from 1B to 5B','🔥'],
@@ -125,16 +125,15 @@ function mmModal(value) { return new ModalBuilder().setCustomId(`fsmm_mm_modal:$
 function supportModal(kind) { const name = Object.fromEntries(SUPPORT_VALUES.map(([label,value]) => [value,label]))[kind] || 'FSMM Support'; return new ModalBuilder().setCustomId(`fsmm_support_modal:${kind}`).setTitle(name).addComponents(row(input('details',kind === 'role_apply' ? 'Why should we accept your application?' : 'Tell us what you need',TextInputStyle.Paragraph)),row(input('roblox','Roblox username',TextInputStyle.Short,false,100,'Optional'))); }
 function paintModal(base) { return new ModalBuilder().setCustomId(`fsmm_paint_modal:${encodeURIComponent(base)}`).setTitle(`${base} Base Painting`).addComponents(row(input('roblox','Roblox username')),row(input('payment','What is your payment?',TextInputStyle.Paragraph,true,500)),row(input('collateral','What is your collateral?',TextInputStyle.Paragraph,true,500)),row(input('extra','Extra details',TextInputStyle.Paragraph,false,900,'Optional'))); }
 
-// Fandom changed/redirected file names several times. Resolve the current image through
-// the wiki's own MediaWiki API instead of guessing a filename. The image is then uploaded
-// to Discord as an attachment, so the preview does not depend on Fandom hotlink redirects.
-function httpGet(url, redirects = 3) {
+// Fandom file names change over time. Resolve the current image through Fandom's own
+// MediaWiki API, download it, and attach it directly to the ephemeral Discord reply.
+// This avoids broken Fandom hotlink/redirect embeds entirely.
+function httpGet(url, redirects = 4) {
   return new Promise((resolve, reject) => {
-    const req = https.get(url, { headers: { 'User-Agent': 'FSMM-Discord-Bot/12.2 (base-preview)' } }, res => {
+    const req = https.get(url, { headers: { 'User-Agent': 'FSMM-Discord-Bot/12.2.1', 'Accept-Encoding': 'identity' } }, res => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects > 0) {
         res.resume();
-        const next = new URL(res.headers.location, url).toString();
-        return resolve(httpGet(next, redirects - 1));
+        return resolve(httpGet(new URL(res.headers.location, url).toString(), redirects - 1));
       }
       if (res.statusCode !== 200) { res.resume(); return reject(new Error(`HTTP ${res.statusCode}`)); }
       const chunks = []; res.on('data', c => chunks.push(c)); res.on('end', () => resolve({ body: Buffer.concat(chunks), contentType: res.headers['content-type'] || '' }));
@@ -145,12 +144,16 @@ function httpGet(url, redirects = 3) {
 }
 async function resolveFandomBase(base) {
   if (baseImageCache.has(base)) return baseImageCache.get(base);
-  const api = `https://stealabrainrot.fandom.com/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(`${base} Base`)}&gsrnamespace=6&gsrlimit=10&prop=imageinfo&iiprop=url&format=json&origin=*`;
+  const api = `https://stealabrainrot.fandom.com/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(`${base} Base`)}&gsrnamespace=6&gsrlimit=20&prop=imageinfo&iiprop=url&format=json&origin=*`;
   const result = await httpGet(api);
   const json = JSON.parse(result.body.toString('utf8'));
   const pages = Object.values(json.query?.pages || {});
-  const wanted = base.toLowerCase().replace(/\s+/g, '');
-  const page = pages.find(p => String(p.title || '').toLowerCase().replace(/[^a-z0-9]+/g, '').includes(wanted + 'base')) || pages[0];
+  const normalized = base.toLowerCase().replace(/[^a-z0-9]+/g, '');
+  const matches = pages.filter(p => {
+    const title = String(p.title || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+    return title.includes(normalized) && title.includes('base');
+  });
+  const page = matches[0] || pages[0];
   const url = page?.imageinfo?.[0]?.url;
   if (!url) throw new Error(`No Fandom image found for ${base}`);
   baseImageCache.set(base, url);
@@ -160,13 +163,14 @@ async function basePreview(base) {
   try {
     const imageUrl = await resolveFandomBase(base);
     const image = await httpGet(imageUrl);
-    const ext = (image.contentType.match(/image\/(png|jpe?g|webp|gif)/i)?.[1] || 'png').replace('jpeg','jpg');
+    const match = image.contentType.match(/image\/(png|jpe?g|webp|gif)/i);
+    const ext = match ? match[1].toLowerCase().replace('jpeg','jpg') : 'png';
     const file = new AttachmentBuilder(image.body, { name: `fsmm-${base.toLowerCase().replace(/[^a-z0-9]+/g,'-')}.${ext}` });
     const e = embed(`${BASE_EMOJIS[base] || '🎨'} ${base} BASE PREVIEW`, `**Base:** ${base}\n\nIf this is the base you want painted, press **Continue to Request** below.`).setImage(`attachment://${file.name}`);
     return { embeds: [e], files: [file] };
   } catch (e) {
     console.error(`[FSMM BASE PREVIEW] ${base}:`, e.message);
-    return { embeds: [embed(`${BASE_EMOJIS[base] || '🎨'} ${base} BASE PREVIEW`, `**Base:** ${base}\n\n⚠️ The official Fandom image could not be loaded right now. You can still continue with the request.`)] };
+    return { embeds: [embed(`${BASE_EMOJIS[base] || '🎨'} ${base} BASE PREVIEW`, `**Base:** ${base}\n\n⚠️ The Fandom image could not be loaded right now. You can still continue with the request.`)] };
   }
 }
 function baseContinue(base) { return row(new ButtonBuilder().setCustomId(`fsmm_base_continue:${encodeURIComponent(base)}`).setLabel('Continue to Request').setEmoji('🎨').setStyle(ButtonStyle.Primary)); }
@@ -243,8 +247,7 @@ async function registerCore() {
   const route = Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID);
   const existing = await rest.get(route);
   const enhanced = Array.isArray(existing) ? existing.filter(c => !coreCommands.some(x => x.name === c.name)) : [];
-  const merged = [...enhanced, ...coreCommands];
-  await rest.put(route, { body: merged });
+  await rest.put(route, { body:[...enhanced, ...coreCommands] });
   const verify = await rest.get(route);
   console.log(`[FSMM COMMANDS] CORE VERIFIED ${verify.filter(c=>coreCommands.some(x=>x.name===c.name)).length}/5`);
 }
@@ -271,8 +274,9 @@ client.on('interactionCreate', async i => {
       if (i.customId === 'fsmm_support_pick') return i.showModal(supportModal(i.values[0]));
       if (i.customId === 'fsmm_base_pick') {
         const base = i.values[0];
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
         const preview = await basePreview(base);
-        return i.reply({ ...preview, components:[baseContinue(base)], flags:MessageFlags.Ephemeral });
+        return i.editReply({ ...preview, components:[baseContinue(base)] });
       }
       return;
     }
