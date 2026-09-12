@@ -1,10 +1,10 @@
 {
   "name": "fsmm-discord-bot",
-  "version": "13.0.0",
+  "version": "13.0.1",
   "description": "FSMM Discord service, ticket, moderation, community and giveaway bot",
   "main": "src/index.js",
   "scripts": {
-    "start": "node -r ./src/command-overhaul.js -r ./src/branding-clean.js -r ./src/security.js -r ./src/audit-logs.js -r ./src/painting-message.js -r ./src/exist.js -r ./src/extra-commands.js -r ./src/fsmm-upgrades.js -r ./src/ticket-overrides.js src/index.js"
+    "start": "node -r ./src/command-registry.js -r ./src/command-overhaul.js -r ./src/branding-clean.js -r ./src/security.js -r ./src/audit-logs.js -r ./src/painting-message.js -r ./src/exist.js -r ./src/extra-commands.js -r ./src/fsmm-upgrades.js -r ./src/ticket-overrides.js src/index.js"
   },
   "engines": {
     "node": ">=20"
