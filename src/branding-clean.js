@@ -1,8 +1,70 @@
 const { EmbedBuilder, StringSelectMenuBuilder } = require('discord.js');
+const https = require('https');
 
-const FOOTER_ICON_URL = 'https://cdn.discordapp.com/attachments/1436074247725383710/1470434524881096816/1770649288038.png?ex=6aa6121e&is=6aa4c09e&hm=fd54c47226a79c68d96f0df59ed485c756ad0a689cc0ad9c85133d1da69c540c';
+const FOOTER_ICON_URL = 'https://cdn.discordapp.com/attachments/1436074247725383710/1470434524881096816/1770649288038.png?ex=6aa6121e&is=6aa4c09e&hm=fd54c47226a79c68d96f0df59ed485c756ad0a689cc0ad9c85133d1da69c540c&';
 
-// Keep public embeds clean and use the FSMM artwork in every FSMM footer.
+// Always use the real FSMM server emojis instead of hard-coded IDs.
+// Hard-coded IDs were the reason the base-menu emojis were showing as broken.
+const emojiByName = new Map();
+const normalize = value => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const aliases = {
+  candy: ['candy'],
+  lava: ['lava'],
+  galaxy: ['galaxy'],
+  yinyang: ['yinyang', 'yinying', 'yinyangbase'],
+  radioactive: ['radioactive', 'radiation', 'radioactivebase'],
+  cursed: ['cursed', 'crused', 'cursedbase'],
+  divine: ['divine', 'divinebase'],
+  cyber: ['cyber', 'cyberbase'],
+  phantom: ['phantom', 'phantombase'],
+  crystal: ['crystal', 'crystalbase']
+};
+
+function loadGuildEmojis() {
+  const token = process.env.DISCORD_TOKEN;
+  const guildId = process.env.GUILD_ID;
+  if (!token || !guildId) return;
+  const req = https.get(`https://discord.com/api/v10/guilds/${guildId}/emojis`, {
+    headers: { Authorization: `Bot ${token}` }
+  }, res => {
+    const chunks = [];
+    res.on('data', c => chunks.push(c));
+    res.on('end', () => {
+      try {
+        if (res.statusCode !== 200) throw new Error(`Discord emoji API HTTP ${res.statusCode}`);
+        const emojis = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        for (const emoji of emojis) {
+          if (!emoji?.name || !emoji?.id) continue;
+          emojiByName.set(normalize(emoji.name), {
+            id: emoji.id,
+            name: emoji.name,
+            animated: Boolean(emoji.animated)
+          });
+        }
+        console.log(`[FSMM] Loaded ${emojiByName.size} server emojis for menus`);
+      } catch (e) {
+        console.error('[FSMM EMOJIS]', e.message);
+      }
+    });
+  });
+  req.on('error', e => console.error('[FSMM EMOJIS]', e.message));
+  req.setTimeout(10000, () => req.destroy(new Error('emoji API timeout')));
+}
+
+function findEmoji(label) {
+  const key = normalize(label);
+  const candidates = aliases[key] || [key];
+  for (const candidate of candidates) {
+    const emoji = emojiByName.get(normalize(candidate));
+    if (emoji) return emoji;
+  }
+  // Also allow names that contain the requested base name.
+  for (const [name, emoji] of emojiByName) {
+    if (candidates.some(candidate => name === normalize(candidate) || name.includes(normalize(candidate)))) return emoji;
+  }
+  return undefined;
+}
+
 const originalSetFooter = EmbedBuilder.prototype.setFooter;
 EmbedBuilder.prototype.setFooter = function(data) {
   if (data && typeof data === 'object' && typeof data.text === 'string' && /^FSMM\s*[•|·-]\s*v?\d/i.test(data.text.trim())) {
@@ -14,38 +76,17 @@ EmbedBuilder.prototype.setFooter = function(data) {
   return originalSetFooter.call(this, data);
 };
 
-// Actual FSMM server base emojis.
-// Select menus must use the emoji field instead of <:name:id> inside labels.
-const BASE_EMOJIS = {
-  cursed: { id: '1467657830202081367', name: 'crused' },
-  rainbow: { id: '1467657664879136934', name: 'rainbow' },
-  diamond: { id: '1467657568313806919', name: 'diamond' },
-  lava: { id: '1467657736920764705', name: 'lava' },
-  candy: { id: '1467657700958539968', name: 'candy' },
-  galaxy: { id: '1467657768084443166', name: 'galaxy' },
-  yinyang: { id: '1467657798363119832', name: 'yinying' }
-};
-
 const originalAddOptions = StringSelectMenuBuilder.prototype.addOptions;
-const normalize = value => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-const emojiForLabel = label => {
-  const key = normalize(label);
-  if (key === 'cursed') return BASE_EMOJIS.cursed;
-  if (key === 'rainbow') return BASE_EMOJIS.rainbow;
-  if (key === 'diamond') return BASE_EMOJIS.diamond;
-  if (key === 'lava') return BASE_EMOJIS.lava;
-  if (key === 'candy') return BASE_EMOJIS.candy;
-  if (key === 'galaxy') return BASE_EMOJIS.galaxy;
-  if (key === 'yinyang' || key === 'yinying') return BASE_EMOJIS.yinyang;
-  return null;
-};
-
 StringSelectMenuBuilder.prototype.addOptions = function(...args) {
   const patch = option => {
     if (Array.isArray(option)) return option.map(patch);
     if (!option || typeof option !== 'object' || !option.label || option.emoji) return option;
-    const emoji = emojiForLabel(option.label);
+    const emoji = findEmoji(option.label);
     return emoji ? { ...option, emoji } : option;
   };
   return originalAddOptions.apply(this, args.map(patch));
 };
+
+// Start loading the server's real emojis immediately. This runs before the bot starts
+// serving interactions because this file is loaded with Node's -r preload option.
+loadGuildEmojis();
