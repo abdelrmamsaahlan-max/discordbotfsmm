@@ -4,8 +4,8 @@ const https = require('https');
 const BRAND_IMAGE_URL='https://cdn.discordapp.com/attachments/1436074247725383710/1470434524881096816/1770649288038.png?ex=6aa6121e&is=6aa4c09e&hm=fd54c47226a79c68d96f0df59ed485c756ad0a689cc0ad9c85133d1da69c540c&';
 const emojiByName=new Map();
 const normalize=value=>String(value||'').toLowerCase().replace(/[^a-z0-9]/g,'');
-const FIXED_EMOJI_IDS={lagrand:'1466191694805602569',moneypuggy:'1468915669612368096',lasupreme:'1466191694805602569',strawberryele:'1468915447557652523',garama:'1466193041558868122',meowl:'1468915447557652523'};
-const labelEmojiIds={'10m250m':'1466191694805602569','250m500m':'1468915669612368096','1b':'1466191694805602569','og':'1468915447557652523'};
+const FIXED_EMOJI_IDS={moneypuggy:'1468915669612368096',garama:'1466193041558868122',lasupreme:'1466191694805602569',strawberryele:'1468915447557652523'};
+const labelEmojiIds={'250m500m':FIXED_EMOJI_IDS.moneypuggy,'1b':FIXED_EMOJI_IDS.lasupreme};
 const aliases={candy:['candy'],lava:['lava'],galaxy:['galaxy'],yinyang:['yinyang','yinying','yin yang','yinyangbase'],radioactive:['radioactive','radiation','radioactivebase'],cursed:['cursed','crused','cursedbase'],rainbow:['rainbow'],diamond:['diamond'],divine:['divine','divinebase'],cyber:['cyber','cyberbase'],phantom:['phantom','phantombase'],crystal:['crystal','crystalbase'],'10m250m':['lagrand','lagrandemoji'],'250m500m':['moneypuggy','moneypug','cashpuggy','richpuggy','money'],'1b':['lasupreme','lasupremeemoji'],'og':['meowl','og','rare','ogitem','rareitem']};
 function storeEmoji(emoji){if(!emoji?.name||!emoji?.id)return;emojiByName.set(normalize(emoji.name),{id:emoji.id,name:emoji.name,animated:Boolean(emoji.animated)});}
 function fixedEmoji(id){return id?{id,name:'',animated:false}:undefined;}
