@@ -74,9 +74,41 @@ function findEmoji(label) {
   return undefined;
 }
 
-// Replace the old FSMM footer with the branding image.
+// Middleman ticket branding/content.
+const MIDDLEMAN_TITLE = '🗂️ {MIDDLE MAN SERVICE}';
+const MIDDLEMAN_DESCRIPTION = `REQUEST A MIDDLE MAN FOR A - SMOOTH AND QUICK TRADE
+
+**Our middlemen ensure both traders complete their side of the deal safely and fairly.**
+
+- [📍](https://discord.com/assets/0da00b0fec31ced4.svg) When opening a ticket.
+
+> * Wait for a middleman to claim your ticket. Do **not** ping middlemen.
+>
+> - Follow the middleman’s instructions carefully.
+>
+> - Vouch the middleman in the **Text⁠《✅》vouches** channel once the trade is done. <:emoji_49:1466347975562363003>`;
+
+const originalSetTitle = EmbedBuilder.prototype.setTitle;
+EmbedBuilder.prototype.setTitle = function(title) {
+  if (title === '🎫 FSMM MIDDLEMAN TICKET') {
+    this.__fsmmMiddlemanTicket = true;
+    originalSetTitle.call(this, MIDDLEMAN_TITLE);
+    return this.setImage(BRAND_IMAGE_URL);
+  }
+  return originalSetTitle.call(this, title);
+};
+
+const originalSetDescription = EmbedBuilder.prototype.setDescription;
+EmbedBuilder.prototype.setDescription = function(description) {
+  if (this.__fsmmMiddlemanTicket) return originalSetDescription.call(this, MIDDLEMAN_DESCRIPTION);
+  return originalSetDescription.call(this, description);
+};
+
 const originalSetFooter = EmbedBuilder.prototype.setFooter;
 EmbedBuilder.prototype.setFooter = function(data) {
+  if (this.__fsmmMiddlemanTicket) {
+    return originalSetFooter.call(this, { text: 'POWERED BY FSMM' });
+  }
   if (data && typeof data === 'object' && typeof data.text === 'string' && (/^FSMM\s*[•|·-]\s*v?\d/i.test(data.text.trim()) || data.text.trim() === 'FSMM')) {
     return this.setImage(BRAND_IMAGE_URL);
   }
@@ -84,8 +116,6 @@ EmbedBuilder.prototype.setFooter = function(data) {
 };
 
 // Patch select-menu options with the actual current server emoji IDs.
-// This runs both when options are added and again at serialization, which
-// prevents the async emoji fetch from racing /setup or other menu creation.
 const originalAddOptions = StringSelectMenuBuilder.prototype.addOptions;
 StringSelectMenuBuilder.prototype.addOptions = function(...args) {
   const patch = option => {
@@ -114,7 +144,6 @@ const originalLogin = Client.prototype.login;
 Client.prototype.login = async function(...args) {
   const result = await originalLogin.apply(this, args);
   try {
-    // Prefer Discord.js's live guild emoji cache once the bot is logged in.
     const guildId = process.env.GUILD_ID;
     const guild = guildId ? this.guilds.cache.get(guildId) : null;
     if (guild?.emojis?.cache) {
