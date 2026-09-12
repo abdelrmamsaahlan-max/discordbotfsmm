@@ -1,10 +1,10 @@
 {
   "name": "fsmm-discord-bot",
-  "version": "12.2.4",
+  "version": "12.2.5",
   "description": "FSMM Discord service, ticket, moderation, community and giveaway bot",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node -r ./src/branding-clean.js -r ./src/security.js -r ./src/painting-message.js -r ./src/exist.js -r ./src/extra-commands.js src/index.js"
   },
   "engines": {
     "node": ">=20"
