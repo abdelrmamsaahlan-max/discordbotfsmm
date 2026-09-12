@@ -3,7 +3,21 @@ const https = require('https');
 
 const BRAND_IMAGE_URL = 'https://cdn.discordapp.com/attachments/1436074247725383710/1470434524881096816/1770649288038.png?ex=6aa6121e&is=6aa4c09e&hm=fd54c47226a79c68d96f0df59ed485c756ad0a689cc0ad9c85133d1da69c540c&';
 
-const emojiByName = new Map();
+// Known FSMM server emojis. These are used immediately so menus do not depend
+// on the async Discord REST request finishing before /setup builds the menu.
+const emojiByName = new Map([
+  ['candy', { id: '1467657700958539968', name: 'candy', animated: false }],
+  ['lava', { id: '1467657736920764705', name: 'lava', animated: false }],
+  ['galaxy', { id: '1467657768084443166', name: 'galaxy', animated: false }],
+  ['yinying', { id: '1467657798363119832', name: 'yinying', animated: false }],
+  ['yinyang', { id: '1467657798363119832', name: 'yinying', animated: false }],
+  ['radioactive', { id: '1467657830202081367', name: 'crused', animated: false }],
+  ['cursed', { id: '1467657830202081367', name: 'crused', animated: false }],
+  ['crused', { id: '1467657830202081367', name: 'crused', animated: false }],
+  ['rainbow', { id: '1467657664879136934', name: 'rainbow', animated: false }],
+  ['diamond', { id: '1467657568313806919', name: 'diamond', animated: false }]
+]);
+
 const normalize = value => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 const aliases = {
   candy: ['candy'],
@@ -12,6 +26,8 @@ const aliases = {
   yinyang: ['yinyang', 'yinying', 'yinyangbase'],
   radioactive: ['radioactive', 'radiation', 'radioactivebase'],
   cursed: ['cursed', 'crused', 'cursedbase'],
+  rainbow: ['rainbow'],
+  diamond: ['diamond'],
   divine: ['divine', 'divinebase'],
   cyber: ['cyber', 'cyberbase'],
   phantom: ['phantom', 'phantombase'],
@@ -62,8 +78,6 @@ function findEmoji(label) {
   return undefined;
 }
 
-// Remove the old FSMM footer and turn the same branding asset into a normal
-// Discord embed image. This keeps the branding visible without a footer.
 const originalSetFooter = EmbedBuilder.prototype.setFooter;
 EmbedBuilder.prototype.setFooter = function(data) {
   if (data && typeof data === 'object' && typeof data.text === 'string' && /^FSMM\s*[•|·-]\s*v?\d/i.test(data.text.trim())) {
@@ -86,7 +100,6 @@ StringSelectMenuBuilder.prototype.addOptions = function(...args) {
   return originalAddOptions.apply(this, args.map(patch));
 };
 
-// Keep the bot presence consistent on every startup/reconnect.
 const originalLogin = Client.prototype.login;
 Client.prototype.login = async function(...args) {
   const result = await originalLogin.apply(this, args);
