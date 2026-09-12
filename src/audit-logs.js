@@ -1,0 +1,30 @@
+'use strict';
+require('dotenv').config();
+const fs=require('fs');
+const path=require('path');
+const {Client,EmbedBuilder,AttachmentBuilder,PermissionFlagsBits}=require('discord.js');
+const DATA=process.env.DATA_FILE||path.join(__dirname,'..','data','store.json');
+const MAX=1800;
+const clean=v=>String(v??'').replace(/@everyone|@here/gi,'@ mention').replace(/[\u0000-\u001F\u007F]/g,' ').trim().slice(0,MAX)||'None';
+function cfg(){try{return JSON.parse(fs.readFileSync(DATA,'utf8'));}catch{return {};}}
+function channel(g){const d=cfg();const id=d.logsChannelId||d.logChannelId||process.env.FSMM_LOG_CHANNEL_ID;return (id&&g.channels.cache.get(id))||g.channels.cache.find(c=>c.isTextBased?.()&&c.name==='fsmm-logs');}
+async function send(g,title,desc,file){try{const c=channel(g);if(!c)return;const e=new EmbedBuilder().setTitle(title).setDescription(clean(desc)).setColor(0x5865f2).setTimestamp().setFooter({text:'FSMM • Audit Logs'});const payload={embeds:[e]};if(file)payload.files=[file];await c.send(payload);}catch(e){console.error('[FSMM AUDIT]',e.message);}}
+function who(m){return m?`<@${m.id}> (${clean(m.user?.tag||m.user?.username||m.id,100)})`:'Unknown';}
+async function transcript(ch){const all=[];let before;for(let page=0;page<20;page++){const opts={limit:100};if(before)opts.before=before;const batch=await ch.messages.fetch(opts);if(!batch.size)break;all.push(...batch.values());before=batch.last()?.id;if(batch.size<100)break;}return all.sort((a,b)=>a.createdTimestamp-b.createdTimestamp).map(m=>{const files=[...m.attachments.values()].map(a=>a.url).join(' | ');const embeds=m.embeds?.length?`[${m.embeds.length} embed(s)]`:'';return `[${new Date(m.createdTimestamp).toISOString()}] ${m.author?.tag||m.author?.id}: ${m.content||''}${embeds?' '+embeds:''}${files?' Attachments: '+files:''}`.trim();}).join('\n')||'No messages recorded.';}
+const originalOn=Client.prototype.on;
+function register(){
+  originalOn.call(this,'guildMemberAdd',m=>send(m.guild,'📥 MEMBER JOINED',`**Member:** ${who(m)}\n**Account:** <t:${Math.floor(m.user.createdTimestamp/1000)}:R>\n**Member count:** ${m.guild.memberCount}`));
+  originalOn.call(this,'guildMemberRemove',m=>send(m.guild,'📤 MEMBER LEFT',`**Member:** ${who(m)}\n**Member count:** ${m.guild.memberCount}`));
+  originalOn.call(this,'guildBanAdd',async b=>send(b.guild,'🔨 MEMBER BANNED',`**User:** <@${b.user.id}>\n**User ID:** ${b.user.id}`));
+  originalOn.call(this,'guildBanRemove',b=>send(b.guild,'♻️ MEMBER UNBANNED',`**User:** <@${b.user.id}>\n**User ID:** ${b.user.id}`));
+  originalOn.call(this,'channelCreate',c=>c.guild&&send(c.guild,'📁 CHANNEL CREATED',`**Channel:** ${c}\n**Type:** ${c.type}\n**Category:** ${c.parent?.name||'None'}`));
+  originalOn.call(this,'channelDelete',c=>c.guild&&send(c.guild,'🗑️ CHANNEL DELETED',`**Channel:** #${c.name}\n**Type:** ${c.type}${c.topic?.includes('FSMM_USER:')?'\n**Ticket:** Yes':''}`));
+  originalOn.call(this,'roleCreate',r=>send(r.guild,'🟢 ROLE CREATED',`**Role:** <@&${r.id}>\n**Name:** ${clean(r.name,100)}`));
+  originalOn.call(this,'roleDelete',r=>send(r.guild,'🔴 ROLE DELETED',`**Role:** ${clean(r.name,100)}\n**Role ID:** ${r.id}`));
+  originalOn.call(this,'roleUpdate',(oldR,newR)=>{const changes=[];if(oldR.name!==newR.name)changes.push(`**Name:** ${clean(oldR.name,80)} → ${clean(newR.name,80)}`);if(oldR.permissions.bitfield!==newR.permissions.bitfield)changes.push('**Permissions:** changed');if(oldR.color!==newR.color)changes.push('**Color:** changed');if(changes.length)send(newR.guild,'🟣 ROLE UPDATED',`**Role:** <@&${newR.id}>\n${changes.join('\n')}`);});
+  originalOn.call(this,'guildMemberUpdate',(oldM,newM)=>{const changes=[];const oldIds=new Set(oldM.roles.cache.keys()),newIds=new Set(newM.roles.cache.keys());const added=[...newIds].filter(x=>!oldIds.has(x)).map(x=>newM.guild.roles.cache.get(x)).filter(Boolean);const removed=[...oldIds].filter(x=>!newIds.has(x)).map(x=>newM.guild.roles.cache.get(x)).filter(Boolean);if(added.length)changes.push(`**Roles added:** ${added.map(r=>`<@&${r.id}>`).join(', ')}`);if(removed.length)changes.push(`**Roles removed:** ${removed.map(r=>`<@&${r.id}>`).join(', ')}`);if(oldM.nickname!==newM.nickname)changes.push(`**Nickname:** ${clean(oldM.nickname||oldM.user.username,80)} → ${clean(newM.nickname||newM.user.username,80)}`);if(changes.length)send(newM.guild,'👤 MEMBER UPDATED',`**Member:** ${who(newM)}\n${changes.join('\n')}`);});
+  originalOn.call(this,'messageDelete',m=>m.guild&&send(m.guild,'🗑️ MESSAGE DELETED',`**Author:** ${m.author?`<@${m.author.id}>`: 'Unknown'}\n**Channel:** ${m.channel}\n**Content:** ${clean(m.content,700)}${m.attachments?.size?`\n**Attachments:** ${m.attachments.size}`:''}`));
+  originalOn.call(this,'messageUpdate',(oldM,newM)=>{if(!newM.guild||oldM.content===newM.content)return;send(newM.guild,'✏️ MESSAGE EDITED',`**Author:** ${newM.author?`<@${newM.author.id}>`:'Unknown'}\n**Channel:** ${newM.channel}\n**Before:** ${clean(oldM.content,500)}\n**After:** ${clean(newM.content,500)}`);});
+  originalOn.call(this,'interactionCreate',async i=>{try{if(!i.guild)return;if(i.isChatInputCommand?.()){if(['help','ping'].includes(i.commandName))return;send(i.guild,'⚡ COMMAND USED',`**User:** ${who(i.member)}\n**Command:** \`/${i.commandName}\`\n**Channel:** ${i.channel}\n**Options:** ${clean(i.options?.data?.map(x=>`${x.name}=${x.value??x.user?.tag??''}`).join(', '),500)}`);}else if(i.isButton?.()){const labels={fsmm_claim:'🎯 TICKET CLAIMED',fsmm_close:'🔒 TICKET CLOSED',fsmm_transcript:'📄 TRANSCRIPT REQUESTED',fsmm_notify:'🔔 STAFF NOTIFIED'};if(labels[i.customId]){const d=`**User:** ${who(i.member)}\n**Channel:** ${i.channel}\n**Action:** ${i.customId}`;if(i.customId==='fsmm_close'&&i.channel?.topic?.includes('FSMM_USER:')){const text=await transcript(i.channel);await send(i.guild,labels[i.customId],d,new AttachmentBuilder(Buffer.from(text,'utf8'),{name:`${i.channel.name}-transcript.txt`}));}else send(i.guild,labels[i.customId],d);}}}catch(e){console.error('[FSMM AUDIT INTERACTION]',e.message);}});
+}
+register();
