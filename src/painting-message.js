@@ -27,7 +27,7 @@ Staff have the final decision regarding painting requests.`;
 
 const originalSetDescription = EmbedBuilder.prototype.setDescription;
 EmbedBuilder.prototype.setDescription = function(description) {
-  if (this.data?.title === '🎫 FSMM BASE-PAINTING TICKET') {
+  if (this.data?.title === '🎨 FSMM BASE PAINTING' || this.data?.title === '🎫 FSMM BASE-PAINTING TICKET') {
     return originalSetDescription.call(this, PAINTING_MESSAGE);
   }
   return originalSetDescription.call(this, description);
