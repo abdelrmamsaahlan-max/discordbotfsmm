@@ -1,15 +1,13 @@
 const fs=require('fs');
 const path=require('path');
-const {EmbedBuilder,ChannelType,PermissionFlagsBits}=require('discord.js');
+const {EmbedBuilder,ChannelType}=require('discord.js');
 
 const CRAFT_CHANNEL=process.env.CRAFT_CHANNEL_ID||'';
 const CRAFT_CHANNEL_NAME=process.env.CRAFT_CHANNEL_NAME||'craft-machine';
 const CRAFT_POLL_MS=Math.max(60,Number(process.env.CRAFT_POLL_SECONDS||120))*1000;
-const CRAFT_SOURCE_URL=process.env.CRAFT_SOURCE_URL||'';
+const CRAFT_SOURCE_URL=process.env.CRAFT_SOURCE_URL||`http://127.0.0.1:${process.env.PORT||3000}/craft/current`;
 const DATA=path.join(__dirname,'..','data','craft-tracker.json');
 
-// Recipe catalogue for the current OG Craft/Craft Machine family.
-// The live rotation itself is intentionally NOT fabricated: it must come from a live source.
 const RECIPES={
   'Electro Quacko':[['Strawberrelli Flamingelli',1],['Burbaloni Loliloli',1],['Chimpanzini Bananini',1]],
   'Los Noobinis':[['Noobini Pizzanini',3],['Tracoducotulu Delapeladustuz',1]],
@@ -29,15 +27,12 @@ const RECIPES={
   'Bee Loco':[['Sigma Boy',1],['Quivioli Ameleonni',1],['Te Te Te Sahur',1],['Frigo Camelo',1]]
 };
 
-let clientRef=null;
-let lastHash=null;
-let lastSourceError='';
-
+let clientRef=null,lastHash=null,lastSourceError='';
 function loadState(){try{if(fs.existsSync(DATA)){const x=JSON.parse(fs.readFileSync(DATA,'utf8'));lastHash=x.lastHash||null}}catch(e){console.error('[CRAFT] state load:',e.message)}}
 function saveState(){try{fs.mkdirSync(path.dirname(DATA),{recursive:true});fs.writeFileSync(DATA,JSON.stringify({lastHash,updatedAt:Date.now()},null,2))}catch(e){console.error('[CRAFT] state save:',e.message)}}
 function clean(v){return String(v??'').replace(/@everyone|@here/gi,'@ mention').trim().slice(0,900)}
 function hash(x){return JSON.stringify(x)}
-function recipeText(name){const r=RECIPES[name];if(!r)return 'Recipe data not confirmed yet.';if(!r.length)return 'Recipe data not confirmed yet.';return r.map(([n,q])=>`${q}x ${n}`).join('\n')}
+function recipeText(name){const r=RECIPES[name];if(!r||!r.length)return 'Recipe data not confirmed yet.';return r.map(([n,q])=>`${q}x ${n}`).join('\n')}
 function normalize(x){
   if(!x)return null;
   const list=Array.isArray(x)?x:(x.brainrots||x.items||x.recipes||x.selected||x.available||x.data);
@@ -51,27 +46,17 @@ function normalize(x){
   }).filter(Boolean);
   return out.length?out:null;
 }
-
 async function fetchLive(){
-  if(!CRAFT_SOURCE_URL)return null;
-  const r=await fetch(CRAFT_SOURCE_URL,{headers:{accept:'application/json,text/html,*/*'},signal:AbortSignal.timeout(10000)});
+  const r=await fetch(CRAFT_SOURCE_URL,{headers:{accept:'application/json'},signal:AbortSignal.timeout(10000)});
   if(!r.ok)throw new Error(`HTTP ${r.status}`);
-  const type=r.headers.get('content-type')||'';
-  if(type.includes('json'))return normalize(await r.json());
-  const text=await r.text();
-  // Supports a simple JSON blob embedded in a page, if the source exposes one.
-  const candidates=[...text.matchAll(/(?:craft|recipe|selected|available)[^\[]*\[([\s\S]{20,20000})\]/gi)];
-  for(const m of candidates){try{const parsed=JSON.parse('['+m[1]+']');const n=normalize(parsed);if(n)return n}catch{}}
-  return null;
+  return normalize(await r.json());
 }
-
 async function getChannel(guild){
   if(CRAFT_CHANNEL){const c=guild.channels.cache.get(CRAFT_CHANNEL);if(c?.type===ChannelType.GuildText)return c}
   let c=guild.channels.cache.find(x=>x.type===ChannelType.GuildText&&x.name===CRAFT_CHANNEL_NAME);
   if(c)return c;
   try{return await guild.channels.create({name:CRAFT_CHANNEL_NAME,type:ChannelType.GuildText,reason:'FSMM Craft Machine tracker'})}catch(e){console.error('[CRAFT] channel:',e.message);return null}
 }
-
 async function post(guild,items){
   const ch=await getChannel(guild);if(!ch)return;
   const e=new EmbedBuilder().setTitle('🔄 CRAFT MACHINE REFRESHED').setDescription('The Craft Machine rotation changed.').setColor(0x5865f2).setTimestamp().setFooter({text:'FSMM Craft Tracker'});
@@ -84,19 +69,17 @@ async function post(guild,items){
   }
   await ch.send({embeds:[e]});
 }
-
 function attach(client){
   if(clientRef)return;
   clientRef=client;loadState();
   client.once('ready',()=>{
     const guild=client.guilds.cache.first();
     if(!guild){console.log('[CRAFT] No guild available');return}
-    console.log(`[CRAFT] tracker started; polling every ${CRAFT_POLL_MS/1000}s`);
-    if(!CRAFT_SOURCE_URL){console.log('[CRAFT] No live source configured. Set CRAFT_SOURCE_URL; tracker will not invent rotations.');return}
+    console.log(`[CRAFT] tracker started; polling every ${CRAFT_POLL_MS/1000}s from ${CRAFT_SOURCE_URL}`);
     const tick=async()=>{
       try{
         const items=await fetchLive();
-        if(!items){if(lastSourceError!=='NO_DATA'){lastSourceError='NO_DATA';console.warn('[CRAFT] live source returned no machine rotation data')}return}
+        if(!items){if(lastSourceError!=='NO_DATA'){lastSourceError='NO_DATA';console.warn('[CRAFT] collector returned no rotation data')}return}
         lastSourceError='';
         const h=hash(items.map(x=>({name:x.name,time:x.time,requirements:x.requirements})));
         if(lastHash===null){lastHash=h;saveState();console.log('[CRAFT] baseline initialized silently');return}
@@ -106,5 +89,4 @@ function attach(client){
     tick();setInterval(tick,CRAFT_POLL_MS).unref();
   });
 }
-
 module.exports={attach,RECIPES};
