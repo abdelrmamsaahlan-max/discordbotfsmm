@@ -1,7 +1,7 @@
 {
   "name": "fsmm-discord-bot",
-  "version": "13.0.8",
-  "description": "FSMM Discord service, ticket, moderation, community and giveaway bot",
+  "version": "13.0.9",
+  "description": "FSMM Discord service, ticket, moderation, community and reward-event bot",
   "main": "src/index.js",
   "scripts": {
     "start": "node -r ./src/craft-collector.js -r ./src/craft-source.js -r ./src/craft-command.js -r ./src/command-registry.js -r ./src/command-overhaul.js -r ./src/branding-clean.js -r ./src/security.js -r ./src/audit-logs.js -r ./src/audit-actor.js -r ./src/command-fixes.js -r ./src/painting-message.js -r ./src/extra-commands.js -r ./src/fsmm-upgrades.js -r ./src/ticket-overrides.js -r ./src/craft-tracker-bootstrap.js -r ./src/giveaway-pro.js src/index.js"
