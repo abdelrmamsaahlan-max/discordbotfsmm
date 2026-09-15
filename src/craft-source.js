@@ -22,19 +22,20 @@ function request(url,options={},body=null){
 }
 
 function extract(raw,contentType=''){
-  let body=raw;
   if(contentType.includes('json')){try{return JSON.parse(raw)}catch{return null}}
   try{return JSON.parse(raw)}catch{}
   const blocks=[];
-  for(const m of raw.matchAll(/<script[^>]*>([\\s\\S]*?)<\\/script>/gi))blocks.push(m[1]);
+  const scriptRe=new RegExp('<script[^>]*>([\\s\\S]*?)<\\/script>','gi');
+  for(const m of raw.matchAll(scriptRe))blocks.push(m[1]);
   for(const b of blocks){
     const text=b.trim();
     if(!text)continue;
-    try{const v=JSON.parse(text); if(v)return v}catch{}
-    const candidates=text.match(/\\[[\\s\\S]*?\\]/g)||[];
-    for(const c of candidates){try{const v=JSON.parse(c); if(Array.isArray(v)&&v.length)return v}catch{}}
+    try{const v=JSON.parse(text);if(v)return v}catch{}
+    const candidates=text.match(/\[[\s\S]*?\]/g)||[];
+    for(const c of candidates){try{const v=JSON.parse(c);if(Array.isArray(v)&&v.length)return v}catch{}}
   }
-  const names=[...raw.matchAll(/(?:brainrot|name|title)\\s*[:=]\\s*["']([^"']+)["']/gi)].map(m=>m[1].trim()).filter(Boolean);
+  const nameRe=/(?:brainrot|name|title)\s*[:=]\s*["']([^"']+)["']/gi;
+  const names=[...raw.matchAll(nameRe)].map(m=>m[1].trim()).filter(Boolean);
   return names.length?names.map(name=>({name})):null;
 }
 
