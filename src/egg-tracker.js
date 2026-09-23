@@ -1,17 +1,150 @@
 const http=require('http');
 const crypto=require('crypto');
 const {EmbedBuilder,ActionRowBuilder,ButtonBuilder,ButtonStyle}=require('discord.js');
+
 const RARE=new Set(['secret','eternal','divine']);
 const PORT=Number(process.env.EGG_TRACKER_PORT||process.env.PORT||3000);
 const CHANNEL_ID=process.env.EGG_TRACKER_CHANNEL_ID;
 const SECRET=process.env.EGG_TRACKER_WEBHOOK_SECRET||'';
+
 let server=null,lastSpawn=null,alerts=0,startedAt=0;
 const seen=new Map();
+
 const clean=(v,n)=>String(v==null?'':v).replace(/@everyone|@here/gi,'@ mention').replace(/[\u0000-\u001F\u007F]/g,' ').trim().slice(0,n||300);
-function normalize(b){const egg=clean(b.egg||b.eggName||b.name,120),rarity=clean(b.rarity,40).toLowerCase();if(!egg||!RARE.has(rarity))return null;return {egg:egg,rarity:rarity.charAt(0).toUpperCase()+rarity.slice(1),zone:clean(b.zone||b.area||'Unknown',100),server:clean(b.server||b.serverId||b.jobId||'Unknown',120),jobId:clean(b.jobId||'',120),timestamp:b.timestamp?new Date(b.timestamp).toISOString():new Date().toISOString(),joinUrl:clean(b.joinUrl||b.serverLink||'',500)}}
-function signatureOk(req,raw){if(!SECRET)return true;const got=String(req.headers['x-fsmm-signature']||'');if(!got)return false;const exp='sha256='+crypto.createHmac('sha256',SECRET).update(raw).digest('hex');return got.length===exp.length&&crypto.timingSafeEqual(Buffer.from(got),Buffer.from(exp))}
+
+function normalize(b){
+  const egg=clean(b.egg||b.eggName||b.name,120);
+  const rarity=clean(b.rarity,40).toLowerCase();
+  if(!egg||!RARE.has(rarity))return null;
+  return {
+    egg,
+    rarity:rarity.charAt(0).toUpperCase()+rarity.slice(1),
+    zone:clean(b.zone||b.area||'Unknown',100),
+    server:clean(b.server||b.serverId||b.jobId||'Unknown',120),
+    jobId:clean(b.jobId||'',120),
+    timestamp:b.timestamp?new Date(b.timestamp).toISOString():new Date().toISOString(),
+    joinUrl:clean(b.joinUrl||b.serverLink||'',500),
+    source:clean(b.source||'unknown',60)
+  };
+}
+
+function signatureOk(req,raw){
+  if(!SECRET)return true;
+  const got=String(req.headers['x-fsmm-signature']||'');
+  if(!got)return false;
+  const exp='sha256='+crypto.createHmac('sha256',SECRET).update(raw).digest('hex');
+  return got.length===exp.length&&crypto.timingSafeEqual(Buffer.from(got),Buffer.from(exp));
+}
+
 function key(x){return [x.egg,x.rarity,x.server,x.jobId,x.timestamp.slice(0,16)].join('|')}
-async function alert(client,x){if(!CHANNEL_ID)throw new Error('Missing EGG_TRACKER_CHANNEL_ID');const ch=await client.channels.fetch(CHANNEL_ID);if(!ch||!ch.isTextBased())throw new Error('EGG_TRACKER_CHANNEL_ID is not a text channel');const colors={Secret:0x8b5cf6,Eternal:0xf59e0b,Divine:0x22c55e};const e=new EmbedBuilder().setTitle('🥚 RARE EGG SPAWN').setDescription('Verified rare-egg event received.').addFields({name:'Egg',value:x.egg,inline:true},{name:'Rarity',value:x.rarity,inline:true},{name:'Zone',value:x.zone,inline:true},{name:'Server',value:x.server,inline:true},{name:'Time',value:'<t:'+Math.floor(new Date(x.timestamp).getTime()/1000)+':F>',inline:true}).setColor(colors[x.rarity]||0x5865f2).setFooter({text:'FSMM Egg Tracker • verified event feed'});const join=x.joinUrl;if(join&&/^https:\/\//i.test(join))e.setURL(join);const rows=[];if(join&&/^https:\/\//i.test(join))rows.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Join Server').setStyle(ButtonStyle.Link).setURL(join)));await ch.send({embeds:[e],components:rows});alerts++;lastSpawn=x}
-function startEggTracker(client){if(server)return;startedAt=Date.now();server=http.createServer((req,res)=>{if(req.method==='GET'&&req.url==='/health'){res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify({ok:true,service:'fsmm-egg-tracker',alerts:alerts,lastSpawn:lastSpawn,uptime:Math.floor((Date.now()-startedAt)/1000)}))}if(req.method!=='POST'||req.url!='/api/egg-spawn'){res.writeHead(404);return res.end('Not found')}const chunks=[];let size=0;req.on('data',c=>{size+=c.length;if(size>100000){res.writeHead(413);return res.end('Payload too large')}chunks.push(c)});req.on('end',async()=>{try{const raw=Buffer.concat(chunks);if(!signatureOk(req,raw)){res.writeHead(401);return res.end('Invalid signature')}const x=normalize(JSON.parse(raw.toString('utf8')));if(!x){res.writeHead(422);return res.end('Unsupported or non-rare egg event')}const k=key(x);if(seen.has(k)){res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify({ok:true,deduped:true}))}seen.set(k,Date.now());for(const [id,t] of seen)if(Date.now()-t>900000)seen.delete(id);await alert(client,x);res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({ok:true,alerted:true}))}catch(e){console.error('[EGG TRACKER]',e);res.writeHead(500,{'content-type':'application/json'});res.end(JSON.stringify({ok:false,error:e.message}))}})});server.listen(PORT,'0.0.0.0',()=>console.log('[EGG TRACKER] listening on '+PORT))}
-function status(){return {running:!!server,port:PORT,alerts:alerts,lastSpawn:lastSpawn,uptime:startedAt?Math.floor((Date.now()-startedAt)/1000):0}}
-module.exports={startEggTracker,status};
+
+async function alert(client,x){
+  if(!CHANNEL_ID)throw new Error('Missing EGG_TRACKER_CHANNEL_ID');
+  const ch=await client.channels.fetch(CHANNEL_ID);
+  if(!ch||!ch.isTextBased())throw new Error('EGG_TRACKER_CHANNEL_ID is not a text channel');
+
+  const colors={Secret:0x8b5cf6,Eternal:0xf59e0b,Divine:0x22c55e};
+  const source=x.source==='community'?'Community report':'External feed';
+
+  const e=new EmbedBuilder()
+    .setTitle('🥚 RARE EGG SPAWN')
+    .setDescription('FSMM Egg Tracker detected a rare egg report.')
+    .addFields(
+      {name:'Egg',value:x.egg,inline:true},
+      {name:'Rarity',value:x.rarity,inline:true},
+      {name:'Zone',value:x.zone,inline:true},
+      {name:'Server',value:x.server,inline:true},
+      {name:'Source',value:source,inline:true},
+      {name:'Time',value:'<t:'+Math.floor(new Date(x.timestamp).getTime()/1000)+':F>',inline:true}
+    )
+    .setColor(colors[x.rarity]||0x5865f2)
+    .setFooter({text:'FSMM Egg Tracker'});
+
+  const join=x.joinUrl;
+  const rows=[];
+  if(join&&/^https:\/\//i.test(join)){
+    rows.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setLabel('Join Server').setStyle(ButtonStyle.Link).setURL(join)
+    ));
+  }
+
+  await ch.send({embeds:[e],components:rows});
+  alerts++;
+  lastSpawn=x;
+}
+
+async function ingestEggSpawn(client,payload){
+  const x=normalize(payload||{});
+  if(!x)return {ok:false,error:'Unsupported or non-rare egg event'};
+
+  const k=key(x);
+  if(seen.has(k))return {ok:true,deduped:true,event:x};
+
+  seen.set(k,Date.now());
+  for(const [id,t] of seen)if(Date.now()-t>900000)seen.delete(id);
+
+  await alert(client,x);
+  return {ok:true,alerted:true,event:x};
+}
+
+function startEggTracker(client){
+  if(server)return;
+  startedAt=Date.now();
+
+  server=http.createServer((req,res)=>{
+    if(req.method==='GET'&&req.url==='/health'){
+      res.writeHead(200,{'content-type':'application/json'});
+      return res.end(JSON.stringify({ok:true,service:'fsmm-egg-tracker',alerts,lastSpawn,uptime:Math.floor((Date.now()-startedAt)/1000)}));
+    }
+
+    if(req.method!=='POST'||req.url!='/api/egg-spawn'){
+      res.writeHead(404);
+      return res.end('Not found');
+    }
+
+    const chunks=[];let size=0;
+    req.on('data',c=>{
+      size+=c.length;
+      if(size>100000){
+        res.writeHead(413);
+        return res.end('Payload too large');
+      }
+      chunks.push(c);
+    });
+
+    req.on('end',async()=>{
+      try{
+        const raw=Buffer.concat(chunks);
+        if(!signatureOk(req,raw)){
+          res.writeHead(401);
+          return res.end('Invalid signature');
+        }
+        const result=await ingestEggSpawn(client,JSON.parse(raw.toString('utf8')));
+        if(!result.ok){
+          res.writeHead(422);
+          return res.end(result.error);
+        }
+        res.writeHead(200,{'content-type':'application/json'});
+        res.end(JSON.stringify(result));
+      }catch(e){
+        console.error('[EGG TRACKER]',e);
+        res.writeHead(500,{'content-type':'application/json'});
+        res.end(JSON.stringify({ok:false,error:e.message}));
+      }
+    });
+  });
+
+  server.listen(PORT,'0.0.0.0',()=>console.log('[EGG TRACKER] listening on '+PORT));
+}
+
+function status(){
+  return {
+    running:!!server,
+    port:PORT,
+    alerts,
+    lastSpawn,
+    uptime:startedAt?Math.floor((Date.now()-startedAt)/1000):0
+  };
+}
+
+module.exports={startEggTracker,status,ingestEggSpawn};
