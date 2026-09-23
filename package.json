@@ -1,11 +1,16 @@
 {
   "name": "fsmm-discord-bot",
   "version": "13.1.5",
-  "description": "FSMM Discord service, ticket, moderation, community and reward-event bot",
+  "description": "FSMM Discord service, ticket, moderation, community, reward-event and rare-egg tracker bot",
   "main": "src/index.js",
   "scripts": {
     "start": "node -r ./src/command-registry.js -r ./src/command-overhaul.js -r ./src/branding-clean.js -r ./src/security.js -r ./src/audit-logs.js -r ./src/audit-actor.js -r ./src/command-fixes.js -r ./src/painting-message.js -r ./src/extra-commands.js -r ./src/fsmm-upgrades.js -r ./src/ticket-overrides.js -r ./src/giveaway-v2.js -r ./src/giveaway-register.js -r ./src/interaction-safety.js src/index.js"
   },
-  "engines": {"node": ">=20"},
-  "dependencies": {"discord.js": "^14.27.0", "dotenv": "^17.2.2"}
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "discord.js": "^14.27.0",
+    "dotenv": "^17.2.2"
+  }
 }
