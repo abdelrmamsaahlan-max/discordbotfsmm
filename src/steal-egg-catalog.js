@@ -35,7 +35,7 @@ function normalizeName(v) {
 }
 function find(name) {
   const n = normalizeName(name);
-  return byName.get(n) || byName.get(n.replace(/\\begg$/, "").trim()) || null;
+  return byName.get(n) || byName.get(n.replace(/\begg$/, "").trim()) || null;
 }
 function formatMoney(n) {
   if (!Number.isFinite(Number(n))) return "Unknown";
