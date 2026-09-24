@@ -447,4 +447,4 @@ function catalogInfo(name) {
   };
 }
 
-module.exports = { start, stop, status, health, stats, recent, recentPage, sources, test, processEvent, catalogInfo, configure, setEnabled, reload:()=>status(), catalog: CATALOG.entries };
+module.exports = { start, stop, status, health, stats, recent, recentPage, sources, test, processEvent, normalize, configure, setEnabled, reload:()=>status(), catalogInfo, catalog: CATALOG.entries };
