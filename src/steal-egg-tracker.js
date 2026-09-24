@@ -24,6 +24,9 @@ let timer = null;
 let webhookServer = null;
 let polling = false;
 let getStore = null;
+let lastSourceError = null;
+const MAX_EVENT_AGE_SEC = Math.max(30, Number(process.env.STEAL_EGG_MAX_EVENT_AGE_SEC || 300));
+
 let markDirty = null;
 
 function clean(v, n = 500) {
@@ -56,7 +59,7 @@ function normalize(raw) {
     value: raw.value ?? raw.moneyPerSecond ?? raw.money_per_second ?? null,
     imageUrl: clean(raw.imageUrl || raw.image_url || '', 1000) || null,
     source: clean(raw.source || 'external-feed', 80),
-    rawData: raw
+    rawData: { id: raw.id || raw.eventId || raw.event_id || null, eggName: egg, itemName: item || null, rarity: r, location: location || null, spawnedAt, expiresAt: unix(raw.expiresAt || raw.expires_at), value: raw.value ?? raw.moneyPerSecond ?? raw.money_per_second ?? null, imageUrl: clean(raw.imageUrl || raw.image_url || '', 1000) || null, source: clean(raw.source || 'external-feed', 80) }
   };
 }
 function store() {
@@ -123,6 +126,9 @@ async function processEvent(raw) {
   if (!event || !TRACKED.has(event.rarity)) return { ok: true, ignored: true };
   state.rareEvents++;
   state.byRarity[event.rarity] = (state.byRarity[event.rarity] || 0) + 1;
+  const now = Math.floor(Date.now() / 1000);
+  if (event.spawnedAt > now + 60) return { ok: true, ignored: true, reason: 'future-event' };
+  if (now - event.spawnedAt > MAX_EVENT_AGE_SEC) return { ok: true, ignored: true, reason: 'stale-event' };
   state.lastEventAt = Date.now();
   state.lastSpawn = event;
   if (seen(event.id)) { state.duplicates++; return { ok: true, deduped: true }; }
@@ -144,6 +150,7 @@ async function fetchFeed() {
     const body = await res.json();
     state.lastSourceSuccessAt = Date.now();
     state.sourceOnline = true;
+    lastSourceError = null;
     return Array.isArray(body) ? body : (body.events || body.data || body.spawns || [body]);
   } finally { clearTimeout(timeout); }
 }
@@ -155,6 +162,7 @@ async function poll() {
     for (const raw of events) await processEvent(raw);
   } catch (e) {
     state.sourceOnline = false; state.errors++;
+    lastSourceError = e.message;
     console.error('[STEAL EGG TRACKER]', e.message);
   } finally { polling = false; }
 }
@@ -176,7 +184,7 @@ function startWebhook() {
         if (size > 100000) throw new Error('Payload too large');
         if (!signatureOk(req, raw)) { res.writeHead(401); return res.end('Invalid signature'); }
         const body = JSON.parse(raw.toString('utf8'));
-        const list = Array.isArray(body) ? body : (body.events || [body]);
+        const list = Array.isArray(body) ? body : (body.events || body.spawns || body.data || [body]);
         const results = [];
         for (const item of list) results.push(await processEvent(item));
         res.writeHead(200, {'content-type':'application/json'});
@@ -193,6 +201,7 @@ function startWebhook() {
 }
 function start(client, options = {}) {
   if (state.running || !ENABLED) return;
+  prune();
   clientRef = client; getStore = options.getStore; markDirty = options.markDirty;
   state.running = true;
   state.source = SOURCE_URL ? 'http-feed' : 'not configured';
@@ -206,7 +215,9 @@ function stop() {
   timer = null; webhookServer = null; state.running = false;
 }
 function status() {
-  return {...state, trackedRarities:[...TRACKED], pollIntervalMs:POLL_MS, sourceConfigured:!!SOURCE_URL};
+  const staleAfter = Math.max(POLL_MS * 3, 15000);
+  const sourceOnline = !!SOURCE_URL && !!state.lastSourceSuccessAt && (Date.now() - state.lastSourceSuccessAt < staleAfter);
+  return {...state, sourceOnline, lastSourceError, trackedRarities:[...TRACKED], pollIntervalMs:POLL_MS, sourceConfigured:!!SOURCE_URL, maxEventAgeSec:MAX_EVENT_AGE_SEC};
 }
 async function test() {
   const event = { id:'test-'+Date.now(), eggName:'Test Egg', itemName:'Test Rare Item', rarity:[...TRACKED][0] || 'SECRET', location:'Test Area', spawnedAt:Math.floor(Date.now()/1000), detectedAt:Math.floor(Date.now()/1000), value:'TEST ONLY', source:'test' };
