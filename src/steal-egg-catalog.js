@@ -26,7 +26,14 @@ const entries = [
   {name:"Unicorn", rarity:"DIVINE", baseIncome:1000000000, location:"Cosmic", eggName:"Unicorn Egg", confidence:"high"},
   {name:"Kitsune", rarity:"DIVINE", baseIncome:1800000000, location:"Cherry Blossom", eggName:"Kitsune Egg", confidence:"high"},
   {name:"Nightflame", rarity:"DIVINE", baseIncome:3000000000, location:"Titan Temple", eggName:"Nightflame Egg", confidence:"medium", disputed:true, note:"Public references disagree on the exact base income; rarity is consistently reported as Divine."},
-  {name:"Shattered Colossus", rarity:"DIVINE", baseIncome:3500000000, location:"Angels and Demons", eggName:"Shattered Colossus Egg", confidence:"medium"}
+  {name:"Mecha Scorpio", rarity:"SECRET", baseIncome:45000000, location:"Monster Egg", eggName:"Monster Egg", confidence:"medium", note:"Monster Egg data is community-reported; another source lists income as unconfirmed."},
+  {name:"Mecha Froggo", rarity:"SECRET", baseIncome:155000000, location:"Monster Egg", eggName:"Monster Egg", confidence:"medium", note:"Monster Egg data is community-reported; another source lists income as unconfirmed."},
+  {name:"Crocodon", rarity:"SECRET", baseIncome:30000000, location:"Monster Egg", eggName:"Monster Egg", confidence:"medium", note:"Monster Egg income is community-reported; other source lists it as TBC."},
+  {name:"Mecha Crocodon", rarity:"ETERNAL", baseIncome:680000000, location:"Monster Egg", eggName:"Monster Egg", confidence:"medium", note:"Monster Egg income is community-reported; other source lists it as TBC."},
+  {name:"Krakenoid", rarity:"ETERNAL", baseIncome:500000000, location:"Monster Egg", eggName:"Monster Egg", confidence:"medium", note:"Monster Egg income is community-reported; other source lists it as TBC."},
+  {name:"Mecha Krakenoid", rarity:"ETERNAL", baseIncome:1000000000, location:"Monster Egg", eggName:"Monster Egg", confidence:"medium", note:"Monster Egg income is community-reported; other source lists it as TBC."},
+  {name:"Dreadscale", rarity:"DIVINE", baseIncome:2000000000, location:"Monster Egg", eggName:"Monster Egg", confidence:"medium", note:"Monster Egg income is community-reported; other source lists it as TBC."},
+  {name:"Mecha Dreadscale", rarity:"DIVINE", baseIncome:4000000000, location:"Monster Egg", eggName:"Monster Egg", confidence:"medium", note:"Monster Egg income is community-reported; other source lists it as TBC."},
 ];
 
 const byName = new Map(entries.map(x => [normalizeName(x.name), x]));
