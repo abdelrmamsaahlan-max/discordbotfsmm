@@ -12,6 +12,8 @@ const WEBHOOK_PORT = Number(process.env.STEAL_EGG_WEBHOOK_PORT || process.env.EG
 const WEBHOOK_SECRET = process.env.STEAL_EGG_WEBHOOK_SECRET || process.env.EGG_TRACKER_WEBHOOK_SECRET || '';
 const POLL_MS = Math.max(2000, Number(process.env.STEAL_EGG_POLL_INTERVAL_MS || 5000));
 const ENABLED = !['0','false','off','no'].includes(String(process.env.STEAL_EGG_TRACKER_ENABLED || 'true').toLowerCase());
+const CATALOG_STRICT = !['0','false','off','no'].includes(String(process.env.STEAL_EGG_CATALOG_STRICT || 'true').toLowerCase());
+const CATALOG = require('./steal-egg-catalog');
 
 let clientRef = null;
 let state = {
@@ -52,14 +54,41 @@ function normalize(raw) {
   if (!r || !egg || !spawnedAt) return null;
   const id = clean(raw.id || raw.eventId || raw.event_id ||
     crypto.createHash('sha256').update([egg,item,r,location,spawnedAt].join('|')).digest('hex'), 128);
+  const catalog = CATALOG.find(item || egg);
+  let verifiedRarity = r;
+  let verificationStatus = catalog ? (catalog.disputed ? 'disputed' : 'verified') : 'unknown';
+  const warnings = [];
+  if (catalog) {
+    if (catalog.rarity !== r) {
+      warnings.push('RARITY_MISMATCH: source=' + r + ', catalog=' + catalog.rarity);
+      if (CATALOG_STRICT && catalog.confidence === 'high') {
+        verifiedRarity = catalog.rarity;
+        verificationStatus = 'corrected';
+      } else {
+        verificationStatus = 'mismatch';
+      }
+    }
+    if (location && catalog.location && CATALOG.normalizeName(location) !== CATALOG.normalizeName(catalog.location)) {
+      warnings.push('LOCATION_MISMATCH: source=' + location + ', catalog=' + catalog.location);
+    }
+  } else if (CATALOG_STRICT) {
+    warnings.push('UNKNOWN_SPECIES: not present in validation catalog');
+  }
   return {
-    id, eggName: egg, itemName: item || null, rarity: r, location: location || null,
-    spawnedAt, detectedAt: Math.floor(Date.now()/1000),
+    id, eggName: egg, itemName: item || null, rarity: verifiedRarity, sourceRarity: r,
+    location: location || null, spawnedAt, detectedAt: Math.floor(Date.now()/1000),
     expiresAt: unix(raw.expiresAt || raw.expires_at),
     value: raw.value ?? raw.moneyPerSecond ?? raw.money_per_second ?? null,
     imageUrl: clean(raw.imageUrl || raw.image_url || '', 1000) || null,
     source: clean(raw.source || 'external-feed', 80),
-    rawData: { id: raw.id || raw.eventId || raw.event_id || null, eggName: egg, itemName: item || null, rarity: r, location: location || null, spawnedAt, expiresAt: unix(raw.expiresAt || raw.expires_at), value: raw.value ?? raw.moneyPerSecond ?? raw.money_per_second ?? null, imageUrl: clean(raw.imageUrl || raw.image_url || '', 1000) || null, source: clean(raw.source || 'external-feed', 80) }
+    verificationStatus, warnings,
+    catalogName: catalog?.name || null,
+    catalogRarity: catalog?.rarity || null,
+    catalogBaseIncome: catalog?.baseIncome || null,
+    catalogLocation: catalog?.location || null,
+    catalogEggName: catalog?.eggName || null,
+    catalogConfidence: catalog?.confidence || null,
+    rawData: { id: raw.id || raw.eventId || raw.event_id || null, eggName: egg, itemName: item || null, sourceRarity: r, rarity: verifiedRarity, location: location || null, spawnedAt, expiresAt: unix(raw.expiresAt || raw.expires_at), value: raw.value ?? raw.moneyPerSecond ?? raw.money_per_second ?? null, imageUrl: clean(raw.imageUrl || raw.image_url || '', 1000) || null, source: clean(raw.source || 'external-feed', 80), verificationStatus, warnings }
   };
 }
 function store() {
@@ -100,12 +129,16 @@ async function sendAlert(event, test = false) {
   if (!channel?.isTextBased()) throw new Error('Alert channel is not text based');
   const colors = { DIVINE: 0xf59e0b, ETERNAL: 0x8b5cf6, SECRET: 0x22c55e };
   const fields = [
-    { name: '💎 Rarity', value: event.rarity, inline: true },
+    { name: '💎 Rarity', value: event.rarity + (event.sourceRarity && event.sourceRarity !== event.rarity ? ' (corrected)' : ''), inline: true },
     { name: '🥚 Egg', value: event.eggName, inline: true }
   ];
   if (event.itemName) fields.push({ name: '🎁 Spawn', value: event.itemName, inline: true });
   if (event.location) fields.push({ name: '📍 Location', value: event.location, inline: true });
-  if (event.value != null && String(event.value).trim()) fields.push({ name: '💰 Value', value: clean(event.value,120), inline: true });
+  if (event.catalogBaseIncome) fields.push({ name: '💰 Base Income', value: CATALOG.formatMoney(event.catalogBaseIncome), inline: true });
+  if (event.value != null && String(event.value).trim()) fields.push({ name: '📡 Source $/s', value: clean(event.value,120), inline: true });
+  if (event.verificationStatus === 'disputed' || event.verificationStatus === 'mismatch' || event.warnings?.length) {
+    fields.push({ name: '⚠️ Data Check', value: clean(event.warnings?.join(' • ') || 'Public data conflict; verify in-game.', 900), inline: false });
+  }
   fields.push({ name: '⏰ Spawned', value: `<t:${event.spawnedAt}:F>\n<t:${event.spawnedAt}:R>`, inline: true });
   fields.push({ name: '🔎 Detected', value: `<t:${event.detectedAt}:R>`, inline: true });
   if (event.expiresAt) fields.push({ name: '⏳ Expires', value: `<t:${event.expiresAt}:R>`, inline: true });
@@ -123,7 +156,11 @@ async function sendAlert(event, test = false) {
 async function processEvent(raw) {
   state.totalEvents++;
   const event = normalize(raw);
-  if (!event || !TRACKED.has(event.rarity)) return { ok: true, ignored: true };
+  if (!event) return { ok: true, ignored: true };
+  if (CATALOG_STRICT && event.verificationStatus === 'unknown') {
+    return { ok: true, ignored: true, reason: 'unknown-species' };
+  }
+  if (!TRACKED.has(event.rarity)) return { ok: true, ignored: true };
   state.rareEvents++;
   state.byRarity[event.rarity] = (state.byRarity[event.rarity] || 0) + 1;
   const now = Math.floor(Date.now() / 1000);
@@ -226,4 +263,14 @@ async function test() {
 function recent() {
   return store()?.stealEggTracker?.recent || [];
 }
-module.exports = { start, stop, status, processEvent, test, recent };
+function catalogInfo(name) {
+  const x = CATALOG.find(name);
+  if (!x) return null;
+  return {
+    name:x.name, rarity:x.rarity, baseIncome:CATALOG.formatMoney(x.baseIncome),
+    location:x.location, eggName:x.eggName, confidence:x.confidence,
+    disputed:!!x.disputed, note:x.note || null
+  };
+}
+
+module.exports = { start, stop, status, processEvent, test, recent, catalogInfo, catalog: CATALOG.entries };
