@@ -106,6 +106,14 @@ function normalize(raw) {
     rawData: { id: raw.id || raw.eventId || raw.event_id || null, eggName: egg, itemName: item || null, sourceRarity: r, rarity: verifiedRarity, location: location || null, spawnedAt, expiresAt: unix(raw.expiresAt || raw.expires_at), value: raw.value ?? raw.moneyPerSecond ?? raw.money_per_second ?? null, imageUrl: clean(raw.imageUrl || raw.image_url || '', 1000) || null, source: clean(raw.source || 'external-feed', 80), verificationStatus, warnings }
   };
 }
+function rarityRoleId(r) {
+  const map = {
+    DIVINE: process.env.STEAL_EGG_DIVINE_ROLE_ID || '',
+    ETERNAL: process.env.STEAL_EGG_ETERNAL_ROLE_ID || '',
+    SECRET: process.env.STEAL_EGG_SECRET_ROLE_ID || ''
+  };
+  return map[r] || trackerConfig().roleId || '';
+}
 function store() {
   return typeof getStore === 'function' ? getStore() : null;
 }
@@ -366,7 +374,7 @@ function status() {
 }
 function trackerConfig() {
   const saved = store()?.stealEggTracker?.config || {};
-  const tracked = saved.trackedRarities || TRACKED_DEFAULT;
+  const tracked = saved.trackedRarities?.length ? saved.trackedRarities : TRACKED_DEFAULT;
   return {
     enabled: saved.enabled ?? ENABLED,
     channelId: saved.channelId ?? CHANNEL_ID,
@@ -408,7 +416,7 @@ function health() {
     memory:process.memoryUsage().rss};
 }
 function stats(period='all') {
-  const history=store()?.stealEggTracker?.recent || [];
+  const history=store()?.stealEggTracker?.history || store()?.stealEggTracker?.recent || [];
   const now=Date.now();
   const windows={today:86400000,'24h':86400000,'7d':604800000,'30d':2592000000,all:Infinity};
   const rows=history.filter(x => now-(x.spawnedAt*1000) <= (windows[period] ?? Infinity));
