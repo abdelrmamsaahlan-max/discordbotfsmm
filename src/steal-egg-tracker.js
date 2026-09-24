@@ -2,8 +2,9 @@ const http = require('http');
 const crypto = require('crypto');
 const { EmbedBuilder } = require('discord.js');
 
-const TRACKED = new Set((process.env.STEAL_EGG_TRACKED_RARITIES || 'DIVINE,ETERNAL,SECRET')
-  .split(',').map(x => x.trim().toUpperCase()).filter(Boolean));
+const TRACKED_DEFAULT = (process.env.STEAL_EGG_TRACKED_RARITIES || 'DIVINE,ETERNAL,SECRET')
+  .split(',').map(x => x.trim().toUpperCase()).filter(x => KNOWN_RARITIES.has(x)));
+const TRACKED = new Set(TRACKED_DEFAULT);
 const CHANNEL_ID = process.env.STEAL_EGG_ALERT_CHANNEL_ID || process.env.EGG_TRACKER_CHANNEL_ID || '';
 const ROLE_ID = process.env.STEAL_EGG_ALERT_ROLE_ID || '';
 const SOURCE_URL = process.env.STEAL_EGG_SOURCE_URL || '';
@@ -248,7 +249,7 @@ async function fetchFeed(url = SOURCE_URL) {
   const headers = { accept: 'application/json' };
   if (SOURCE_API_KEY) headers.authorization = 'Bearer ' + SOURCE_API_KEY;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Math.min(POLL_MS - 250, 10000));
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   const started = Date.now();
   state.lastRequestAt = Date.now();
   try {
@@ -430,11 +431,11 @@ function sources() {
   }));
 }
 
-async function test(
-  const event = { id:'test-'+Date.now(), eggName:'Test Egg', itemName:'Test Rare Item', rarity:rarity(testRarity) || trackerConfig().trackedRarities[0] || 'SECRET', location:'Test Area', spawnedAt:Math.floor(Date.now()/1000), detectedAt:Math.floor(Date.now()/1000), value:'TEST ONLY', source:'test' };
+async function test(testRarity = null) {
+  const selected = rarity(testRarity) || trackerConfig().trackedRarities[0] || 'SECRET';
+  const event = { id:'test-'+Date.now(), eggName:'Test Egg', itemName:'Test Rare Item', rarity:selected, sourceRarity:selected, location:'Test Area', spawnedAt:Math.floor(Date.now()/1000), detectedAt:Math.floor(Date.now()/1000), value:'TEST ONLY', source:'test', verificationStatus:'test', warnings:[] };
   return sendAlertWithRetry(event, true);
 }
-function recent() { return store()?.stealEggTracker?.recent || []; }
 function recentPage(page=1,pageSize=5) { const rows=store()?.stealEggTracker?.recent || []; const totalPages=Math.max(1,Math.ceil(rows.length/pageSize)); const p=Math.min(Math.max(1,Number(page)||1),totalPages); return {page:p,totalPages,total:rows.length,items:rows.slice((p-1)*pageSize,p*pageSize)}; }
 
 function catalogInfo(name) {
@@ -447,4 +448,16 @@ function catalogInfo(name) {
   };
 }
 
-module.exports = { start, stop, status, health, stats, recent, recentPage, sources, test, processEvent, normalize, configure, setEnabled, reload:()=>status(), catalogInfo, catalog: CATALOG.entries };
+function reload() {
+  const wasRunning = state.running;
+  if (timer) { clearInterval(timer); timer = null; }
+  const c = trackerConfig();
+  state.enabled = c.enabled;
+  if (wasRunning && state.enabled && (SOURCE_URL || SECONDARY_SOURCE_URL || FALLBACK_SOURCE_URL)) {
+    poll();
+    timer = setInterval(poll, POLL_MS);
+  }
+  if (!state.enabled) state.sourceStatus = 'disabled';
+  return status();
+}
+module.exports = { start, stop, status, health, stats, recent, recentPage, sources, test, processEvent, normalize, configure, setEnabled, reload, catalogInfo, catalog: CATALOG.entries };
