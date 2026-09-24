@@ -33,7 +33,10 @@ const byName = new Map(entries.map(x => [normalizeName(x.name), x]));
 function normalizeName(v) {
   return String(v ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
-function find(name) { return byName.get(normalizeName(name)) || null; }
+function find(name) {
+  const n = normalizeName(name);
+  return byName.get(n) || byName.get(n.replace(/\\begg$/, "").trim()) || null;
+}
 function formatMoney(n) {
   if (!Number.isFinite(Number(n))) return "Unknown";
   const x = Number(n);
