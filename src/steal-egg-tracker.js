@@ -225,8 +225,8 @@ async function processEvent(raw) {
     }
   });
 }
-async function fetchFeed() {
-  if (!SOURCE_URL) return null;
+async function fetchFeed(url = SOURCE_URL) {
+  if (!url) return null;
   const headers = { accept: 'application/json' };
   if (SOURCE_API_KEY) headers.authorization = 'Bearer ' + SOURCE_API_KEY;
   const controller = new AbortController();
@@ -234,7 +234,7 @@ async function fetchFeed() {
   const started = Date.now();
   state.lastRequestAt = Date.now();
   try {
-    const res = await fetch(SOURCE_URL, { headers, signal: controller.signal });
+    const res = await fetch(url, { headers, signal: controller.signal });
     state.sourceLatencyMs = Date.now() - started;
     if (res.status === 429) {
       const retry = Number(res.headers.get('retry-after') || 0);
@@ -417,6 +417,8 @@ async function test(
   return sendAlertWithRetry(event, true);
 }
 function recent() { return store()?.stealEggTracker?.recent || []; }
+function recentPage(page=1,pageSize=5) { const rows=store()?.stealEggTracker?.recent || []; const totalPages=Math.max(1,Math.ceil(rows.length/pageSize)); const p=Math.min(Math.max(1,Number(page)||1),totalPages); return {page:p,totalPages,total:rows.length,items:rows.slice((p-1)*pageSize,p*pageSize)}; }
+
 function catalogInfo(name) {
   const x = CATALOG.find(name);
   if (!x) return null;
