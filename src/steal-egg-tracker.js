@@ -2,8 +2,9 @@ const http = require('http');
 const crypto = require('crypto');
 const { EmbedBuilder } = require('discord.js');
 
-const TRACKED_DEFAULT = (process.env.STEAL_EGG_TRACKED_RARITIES || 'DIVINE,ETERNAL,SECRET')
-  .split(',').map(x => x.trim().toUpperCase()).filter(x => KNOWN_RARITIES.has(x)));
+const KNOWN_RARITIES = new Set(['COMMON','UNCOMMON','RARE','EPIC','LEGENDARY','MYTHIC','COSMIC','SECRET','ETERNAL','DIVINE']);
+const TRACKED_DEFAULT = [...new Set((process.env.STEAL_EGG_TRACKED_RARITIES || 'DIVINE,ETERNAL,SECRET')
+  .split(',').map(x => x.trim().toUpperCase()).filter(x => KNOWN_RARITIES.has(x)))];
 const TRACKED = new Set(TRACKED_DEFAULT);
 const CHANNEL_ID = process.env.STEAL_EGG_ALERT_CHANNEL_ID || process.env.EGG_TRACKER_CHANNEL_ID || '';
 const ROLE_ID = process.env.STEAL_EGG_ALERT_ROLE_ID || '';
@@ -15,7 +16,6 @@ const POLL_MS = Math.max(2000, Number(process.env.STEAL_EGG_POLL_INTERVAL_MS || 
 const ENABLED = !['0','false','off','no'].includes(String(process.env.STEAL_EGG_TRACKER_ENABLED || 'true').toLowerCase());
 const CATALOG_STRICT = !['0','false','off','no'].includes(String(process.env.STEAL_EGG_CATALOG_STRICT || 'true').toLowerCase());
 const CATALOG = require('./steal-egg-catalog');
-const KNOWN_RARITIES = new Set(['COMMON','UNCOMMON','RARE','EPIC','LEGENDARY','MYTHIC','COSMIC','SECRET','ETERNAL','DIVINE']);
 const STRICT = !['0','false','off','no'].includes(String(process.env.STEAL_EGG_CATALOG_STRICT || 'true').toLowerCase());
 const REQUEST_TIMEOUT_MS = Math.max(1000, Number(process.env.STEAL_EGG_SOURCE_TIMEOUT_MS || 10000));
 const RETENTION_DAYS = Math.max(1, Number(process.env.STEAL_EGG_RETENTION_DAYS || 30));
