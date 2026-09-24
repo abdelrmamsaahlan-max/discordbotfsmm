@@ -40,6 +40,7 @@ let consecutiveSourceFailures = 0;
 let activeSourceIndex = 0;
 const recentIds = new Map();
 let alertQueue = Promise.resolve();
+const inFlight = new Set();
 const MAX_EVENT_AGE_SEC = Math.max(30, Number(process.env.STEAL_EGG_MAX_EVENT_AGE_SEC || 300));
 
 let markDirty = null;
@@ -197,7 +198,7 @@ async function processEvent(raw) {
   if (CATALOG_STRICT && event.verificationStatus === 'unknown') {
     return { ok: true, ignored: true, reason: 'unknown-species' };
   }
-  if (!TRACKED.has(event.rarity)) return { ok: true, ignored: true };
+  if (!trackerConfig().trackedRarities.includes(event.rarity)) return { ok: true, ignored: true, reason: 'untracked-rarity' };
   state.rareEvents++;
   state.byRarity[event.rarity] = (state.byRarity[event.rarity] || 0) + 1;
   const now = Math.floor(Date.now() / 1000);
@@ -251,39 +252,37 @@ async function fetchFeed() {
   } finally { clearTimeout(timeout); }
 }
 async function poll() {
-  if (polling || !ENABLED) return;
+  if (polling || !state.enabled) return;
   const sources = [SOURCE_URL, SECONDARY_SOURCE_URL, FALLBACK_SOURCE_URL].filter(Boolean);
   if (!sources.length) { state.sourceStatus = 'offline'; state.sourceOnline = false; return; }
   polling = true;
   try {
     let events = null;
-    let selected = activeSourceIndex;
     for (let attempt = 0; attempt < sources.length; attempt++) {
       const index = (activeSourceIndex + attempt) % sources.length;
       try {
-        const old = process.env.STEAL_EGG_SOURCE_URL;
-        if (index === 0) process.env.STEAL_EGG_SOURCE_URL = sources[index];
-        else process.env.STEAL_EGG_SOURCE_URL = sources[index];
-        events = await fetchFeed();
-        selected = index;
+        events = await fetchFeed(sources[index]);
+        const recovered = state.lastSourceFailureAt && state.lastSourceSuccessAt > state.lastSourceFailureAt;
+        activeSourceIndex = index;
         consecutiveSourceFailures = 0;
+        state.source = index === 0 ? 'primary' : index === 1 ? 'secondary' : 'fallback';
+        state.sourceStatus = 'online';
+        if (recovered) state.lastRecoveryAt = Date.now();
         break;
       } catch (e) {
         consecutiveSourceFailures++;
         state.errors++;
         state.lastSourceFailureAt = Date.now();
         lastSourceError = e.message;
-        console.error('[STEAL EGG TRACKER] source ' + (index + 1) + ':', e.message);
+        console.error('[STEAL EGG TRACKER] source failure:', e.message);
         if (consecutiveSourceFailures < 3) break;
       }
     }
-    activeSourceIndex = selected;
     if (events == null) {
       state.sourceOnline = false;
       state.sourceStatus = consecutiveSourceFailures >= 3 ? 'offline' : 'degraded';
       return;
     }
-    state.sourceStatus = 'online';
     for (const raw of events || []) await processEvent(raw);
   } finally { polling = false; }
 }
@@ -326,10 +325,12 @@ function start(client, options = {}) {
   clientRef = client; getStore = options.getStore; markDirty = options.markDirty;
   state.running = true;
   state.startedAt = Date.now();
+  state.enabled = trackerConfig().enabled;
   state.source = SOURCE_URL ? 'primary' : 'not configured';
   startWebhook();
-  if (SOURCE_URL) { poll(); timer = setInterval(poll, POLL_MS); }
-  else console.warn('[STEAL EGG TRACKER] No live source configured; tracker is ready but not live.');
+  if (state.enabled && (SOURCE_URL || SECONDARY_SOURCE_URL || FALLBACK_SOURCE_URL)) { poll(); timer = setInterval(poll, POLL_MS); }
+  else if (state.enabled) console.warn('[STEAL EGG TRACKER] No live source configured; tracker is ready but not live.');
+  else state.sourceStatus = 'disabled';
 }
 function stop() {
   if (timer) clearInterval(timer);
@@ -338,7 +339,7 @@ function stop() {
 }
 function status() {
   const staleAfter = Math.max(POLL_MS * 3, 15000);
-  const sourceOnline = !!SOURCE_URL && !!state.lastSourceSuccessAt && (Date.now() - state.lastSourceSuccessAt < staleAfter);
+  const sourceOnline = state.enabled && !!state.lastSourceSuccessAt && (Date.now() - state.lastSourceSuccessAt < staleAfter);
   const c = trackerConfig();
   return {...state, sourceOnline, lastSourceError, trackedRarities:c.trackedRarities, pollIntervalMs:POLL_MS,
     sourceConfigured:!!(SOURCE_URL || SECONDARY_SOURCE_URL || FALLBACK_SOURCE_URL), maxEventAgeSec:MAX_EVENT_AGE_SEC,
@@ -412,12 +413,10 @@ function sources() {
 }
 
 async function test(
-  const event = { id:'test-'+Date.now(), eggName:'Test Egg', itemName:'Test Rare Item', rarity:[...TRACKED][0] || 'SECRET', location:'Test Area', spawnedAt:Math.floor(Date.now()/1000), detectedAt:Math.floor(Date.now()/1000), value:'TEST ONLY', source:'test' };
+  const event = { id:'test-'+Date.now(), eggName:'Test Egg', itemName:'Test Rare Item', rarity:rarity(testRarity) || trackerConfig().trackedRarities[0] || 'SECRET', location:'Test Area', spawnedAt:Math.floor(Date.now()/1000), detectedAt:Math.floor(Date.now()/1000), value:'TEST ONLY', source:'test' };
   return sendAlertWithRetry(event, true);
 }
-function recent() {
-  return store()?.stealEggTracker?.recent || [];
-}
+function recent() { return store()?.stealEggTracker?.recent || []; }
 function catalogInfo(name) {
   const x = CATALOG.find(name);
   if (!x) return null;
@@ -428,4 +427,4 @@ function catalogInfo(name) {
   };
 }
 
-module.exports = { start, stop, status, health, stats, recent, sources, test, processEvent, catalogInfo, configure, setEnabled, reload:()=>status(), catalog: CATALOG.entries };
+module.exports = { start, stop, status, health, stats, recent, recentPage, sources, test, processEvent, catalogInfo, configure, setEnabled, reload:()=>status(), catalog: CATALOG.entries };
