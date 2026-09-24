@@ -14,19 +14,32 @@ const POLL_MS = Math.max(2000, Number(process.env.STEAL_EGG_POLL_INTERVAL_MS || 
 const ENABLED = !['0','false','off','no'].includes(String(process.env.STEAL_EGG_TRACKER_ENABLED || 'true').toLowerCase());
 const CATALOG_STRICT = !['0','false','off','no'].includes(String(process.env.STEAL_EGG_CATALOG_STRICT || 'true').toLowerCase());
 const CATALOG = require('./steal-egg-catalog');
+const KNOWN_RARITIES = new Set(['COMMON','UNCOMMON','RARE','EPIC','LEGENDARY','MYTHIC','COSMIC','SECRET','ETERNAL','DIVINE']);
+const STRICT = !['0','false','off','no'].includes(String(process.env.STEAL_EGG_CATALOG_STRICT || 'true').toLowerCase());
+const REQUEST_TIMEOUT_MS = Math.max(1000, Number(process.env.STEAL_EGG_SOURCE_TIMEOUT_MS || 10000));
+const RETENTION_DAYS = Math.max(1, Number(process.env.STEAL_EGG_RETENTION_DAYS || 30));
+const CACHE_LIMIT = Math.max(50, Number(process.env.STEAL_EGG_CACHE_LIMIT || 1000));
+const SECONDARY_SOURCE_URL = process.env.STEAL_EGG_SECONDARY_SOURCE_URL || '';
+const FALLBACK_SOURCE_URL = process.env.STEAL_EGG_FALLBACK_SOURCE_URL || '';
 
 let clientRef = null;
 let state = {
   running: false, source: 'not configured', sourceOnline: false,
   lastEventAt: null, lastSourceSuccessAt: null, lastAlertAt: null,
   alerts: 0, duplicates: 0, errors: 0, totalEvents: 0, rareEvents: 0,
-  byRarity: {}, lastSpawn: null
+  failedAlerts: 0, retries: 0, byRarity: {}, lastSpawn: null,
+  sourceLatencyMs: null, lastRequestAt: null, lastSourceFailureAt: null,
+  startedAt: null, lastRecoveryAt: null, sourceStatus: 'offline'
 };
 let timer = null;
 let webhookServer = null;
 let polling = false;
 let getStore = null;
 let lastSourceError = null;
+let consecutiveSourceFailures = 0;
+let activeSourceIndex = 0;
+const recentIds = new Map();
+let alertQueue = Promise.resolve();
 const MAX_EVENT_AGE_SEC = Math.max(30, Number(process.env.STEAL_EGG_MAX_EVENT_AGE_SEC || 300));
 
 let markDirty = null;
@@ -37,7 +50,7 @@ function clean(v, n = 500) {
 }
 function rarity(v) {
   const r = clean(v, 40).toUpperCase();
-  return r || null;
+  return KNOWN_RARITIES.has(r) ? r : null;
 }
 function unix(v) {
   const d = v == null ? new Date() : new Date(v);
@@ -95,8 +108,18 @@ function store() {
   return typeof getStore === 'function' ? getStore() : null;
 }
 function seen(id) {
+  if (recentIds.has(id)) return true;
   const s = store();
   return !!(s && s.stealEggTracker && s.stealEggTracker.processed && s.stealEggTracker.processed[id]);
+}
+function rememberCache(id) {
+  recentIds.set(id, Date.now());
+  while (recentIds.size > CACHE_LIMIT) recentIds.delete(recentIds.keys().next().value);
+}
+function enqueue(task) {
+  const run = alertQueue.then(task, task);
+  alertQueue = run.catch(() => {});
+  return run;
 }
 function remember(event, alertMessageId) {
   const s = store();
@@ -111,7 +134,7 @@ function remember(event, alertMessageId) {
 function prune() {
   const s = store();
   if (!s?.stealEggTracker?.processed) return;
-  const cutoff = Date.now() - 7 * 86400000;
+  const cutoff = Date.now() - RETENTION_DAYS * 86400000;
   for (const [id,v] of Object.entries(s.stealEggTracker.processed)) {
     const at = typeof v === 'object' ? v.at : v;
     if (at < cutoff) delete s.stealEggTracker.processed[id];
@@ -153,6 +176,20 @@ async function sendAlert(event, test = false) {
   const msg = await channel.send({ content, allowedMentions: ROLE_ID && !test ? { roles: [ROLE_ID] } : { parse: [] }, embeds: [embed] });
   return msg;
 }
+
+async function sendAlertWithRetry(event, test = false) {
+  let delay = 500;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try { return await sendAlert(event, test); }
+    catch (e) {
+      if (attempt === 3) throw e;
+      state.retries++;
+      await new Promise(r => setTimeout(r, delay));
+      delay = Math.min(delay * 2, 5000);
+    }
+  }
+}
+
 async function processEvent(raw) {
   state.totalEvents++;
   const event = normalize(raw);
@@ -169,11 +206,23 @@ async function processEvent(raw) {
   state.lastEventAt = Date.now();
   state.lastSpawn = event;
   if (seen(event.id)) { state.duplicates++; return { ok: true, deduped: true }; }
-  const msg = await sendAlert(event);
-  remember(event, msg.id);
-  state.alerts++;
-  state.lastAlertAt = Date.now();
-  return { ok: true, alerted: true, event };
+  if (seen(event.id)) { state.duplicates++; return { ok: true, deduped: true, event }; }
+  rememberCache(event.id);
+  return enqueue(async () => {
+    if (seen(event.id)) { state.duplicates++; return { ok: true, deduped: true, event }; }
+    try {
+      const msg = await sendAlertWithRetry(event);
+      remember(event, msg.id);
+      state.alerts++;
+      state.lastAlertAt = Date.now();
+      return { ok: true, alerted: true, event, messageId: msg.id };
+    } catch (e) {
+      state.failedAlerts++;
+      state.errors++;
+      console.error('[STEAL EGG TRACKER] alert failed:', e.stack || e.message);
+      return { ok: false, alertFailed: true, event, error: e.message };
+    }
+  });
 }
 async function fetchFeed() {
   if (!SOURCE_URL) return null;
@@ -181,26 +230,61 @@ async function fetchFeed() {
   if (SOURCE_API_KEY) headers.authorization = 'Bearer ' + SOURCE_API_KEY;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), Math.min(POLL_MS - 250, 10000));
+  const started = Date.now();
+  state.lastRequestAt = Date.now();
   try {
     const res = await fetch(SOURCE_URL, { headers, signal: controller.signal });
+    state.sourceLatencyMs = Date.now() - started;
+    if (res.status === 429) {
+      const retry = Number(res.headers.get('retry-after') || 0);
+      if (retry > 0) await new Promise(r => setTimeout(r, Math.min(retry * 1000, 30000)));
+      state.retries++;
+      throw new Error('source HTTP 429');
+    }
     if (!res.ok) throw new Error('source HTTP ' + res.status);
     const body = await res.json();
     state.lastSourceSuccessAt = Date.now();
     state.sourceOnline = true;
+    state.sourceStatus = 'online';
     lastSourceError = null;
-    return Array.isArray(body) ? body : (body.events || body.data || body.spawns || [body]);
+    return Array.isArray(body) ? body : (body.events || body.spawns || body.data || [body]);
   } finally { clearTimeout(timeout); }
 }
 async function poll() {
-  if (polling || !SOURCE_URL || !ENABLED) return;
+  if (polling || !ENABLED) return;
+  const sources = [SOURCE_URL, SECONDARY_SOURCE_URL, FALLBACK_SOURCE_URL].filter(Boolean);
+  if (!sources.length) { state.sourceStatus = 'offline'; state.sourceOnline = false; return; }
   polling = true;
   try {
-    const events = await fetchFeed() || [];
-    for (const raw of events) await processEvent(raw);
-  } catch (e) {
-    state.sourceOnline = false; state.errors++;
-    lastSourceError = e.message;
-    console.error('[STEAL EGG TRACKER]', e.message);
+    let events = null;
+    let selected = activeSourceIndex;
+    for (let attempt = 0; attempt < sources.length; attempt++) {
+      const index = (activeSourceIndex + attempt) % sources.length;
+      try {
+        const old = process.env.STEAL_EGG_SOURCE_URL;
+        if (index === 0) process.env.STEAL_EGG_SOURCE_URL = sources[index];
+        else process.env.STEAL_EGG_SOURCE_URL = sources[index];
+        events = await fetchFeed();
+        selected = index;
+        consecutiveSourceFailures = 0;
+        break;
+      } catch (e) {
+        consecutiveSourceFailures++;
+        state.errors++;
+        state.lastSourceFailureAt = Date.now();
+        lastSourceError = e.message;
+        console.error('[STEAL EGG TRACKER] source ' + (index + 1) + ':', e.message);
+        if (consecutiveSourceFailures < 3) break;
+      }
+    }
+    activeSourceIndex = selected;
+    if (events == null) {
+      state.sourceOnline = false;
+      state.sourceStatus = consecutiveSourceFailures >= 3 ? 'offline' : 'degraded';
+      return;
+    }
+    state.sourceStatus = 'online';
+    for (const raw of events || []) await processEvent(raw);
   } finally { polling = false; }
 }
 function startWebhook() {
@@ -241,7 +325,8 @@ function start(client, options = {}) {
   prune();
   clientRef = client; getStore = options.getStore; markDirty = options.markDirty;
   state.running = true;
-  state.source = SOURCE_URL ? 'http-feed' : 'not configured';
+  state.startedAt = Date.now();
+  state.source = SOURCE_URL ? 'primary' : 'not configured';
   startWebhook();
   if (SOURCE_URL) { poll(); timer = setInterval(poll, POLL_MS); }
   else console.warn('[STEAL EGG TRACKER] No live source configured; tracker is ready but not live.');
@@ -254,11 +339,81 @@ function stop() {
 function status() {
   const staleAfter = Math.max(POLL_MS * 3, 15000);
   const sourceOnline = !!SOURCE_URL && !!state.lastSourceSuccessAt && (Date.now() - state.lastSourceSuccessAt < staleAfter);
-  return {...state, sourceOnline, lastSourceError, trackedRarities:[...TRACKED], pollIntervalMs:POLL_MS, sourceConfigured:!!SOURCE_URL, maxEventAgeSec:MAX_EVENT_AGE_SEC};
+  const c = trackerConfig();
+  return {...state, sourceOnline, lastSourceError, trackedRarities:c.trackedRarities, pollIntervalMs:POLL_MS,
+    sourceConfigured:!!(SOURCE_URL || SECONDARY_SOURCE_URL || FALLBACK_SOURCE_URL), maxEventAgeSec:MAX_EVENT_AGE_SEC,
+    strictCatalog:STRICT, uptimeMs:state.startedAt ? Date.now()-state.startedAt : 0, sourceCount:[SOURCE_URL,SECONDARY_SOURCE_URL,FALLBACK_SOURCE_URL].filter(Boolean).length};
 }
-async function test() {
+function trackerConfig() {
+  const saved = store()?.stealEggTracker?.config || {};
+  const tracked = saved.trackedRarities || TRACKED_DEFAULT;
+  return {
+    enabled: saved.enabled ?? ENABLED,
+    channelId: saved.channelId ?? CHANNEL_ID,
+    roleId: saved.roleId ?? ROLE_ID,
+    errorChannelId: saved.errorChannelId ?? process.env.STEAL_EGG_ERROR_CHANNEL_ID ?? '',
+    statsChannelId: saved.statsChannelId ?? process.env.STEAL_EGG_STATS_CHANNEL_ID ?? '',
+    trackedRarities: [...new Set(tracked.map(x => String(x).toUpperCase()).filter(x => KNOWN_RARITIES.has(x)))],
+    images: saved.images ?? true,
+    location: saved.location ?? true,
+    expiration: saved.expiration ?? true,
+    style: saved.style || 'professional'
+  };
+}
+function configure(patch) {
+  const s = store();
+  if (!s) return status();
+  s.stealEggTracker ||= { processed:{}, recent:[], stats:{}, config:{} };
+  s.stealEggTracker.config = {...trackerConfig(), ...patch};
+  s.stealEggTracker.config.trackedRarities = [...new Set((s.stealEggTracker.config.trackedRarities || TRACKED_DEFAULT).map(x => String(x).toUpperCase()).filter(x => KNOWN_RARITIES.has(x)))];
+  if (!s.stealEggTracker.config.trackedRarities.length) s.stealEggTracker.config.trackedRarities = TRACKED_DEFAULT;
+  if (typeof markDirty === 'function') markDirty();
+  return status();
+}
+function setEnabled(enabled) {
+  configure({enabled:!!enabled});
+  if (!enabled && timer) { clearInterval(timer); timer = null; }
+  if (enabled && state.running && !timer && (SOURCE_URL || SECONDARY_SOURCE_URL || FALLBACK_SOURCE_URL)) {
+    poll(); timer = setInterval(poll, POLL_MS);
+  }
+  return status();
+}
+function health() {
+  const s = status();
+  return {tracker:s.enabled ? (s.sourceStatus === 'online' ? 'online' : 'degraded') : 'disabled',
+    source:s.sourceOnline ? 'online' : (s.sourceConfigured ? s.sourceStatus : 'not-configured'),
+    database:store() ? 'online' : 'offline', discord:clientRef?.isReady?.() ? 'connected' : 'disconnected',
+    sourceLatencyMs:s.sourceLatencyMs, lastRequestAt:s.lastRequestAt, lastEventAt:s.lastEventAt,
+    lastSourceSuccessAt:s.lastSourceSuccessAt, failedAlerts:s.failedAlerts, retries:s.retries, errors:s.errors,
+    memory:process.memoryUsage().rss};
+}
+function stats(period='all') {
+  const history=store()?.stealEggTracker?.recent || [];
+  const now=Date.now();
+  const windows={today:86400000,'24h':86400000,'7d':604800000,'30d':2592000000,all:Infinity};
+  const rows=history.filter(x => now-(x.spawnedAt*1000) <= (windows[period] ?? Infinity));
+  const by={}; for(const x of rows) by[x.rarity]=(by[x.rarity]||0)+1;
+  const lat=rows.map(x => Number(x.detectionLatencyMs)).filter(Number.isFinite);
+  return {period,totalDetected:rows.length,divine:by.DIVINE||0,eternal:by.ETERNAL||0,secret:by.SECRET||0,
+    alertsSent:state.alerts,duplicatesPrevented:state.duplicates,sourceErrors:state.errors,
+    averageDetectionLatencyMs:lat.length?Math.round(lat.reduce((a,b)=>a+b,0)/lat.length):0};
+}
+function recent(page=1,pageSize=5) {
+  const rows=store()?.stealEggTracker?.recent || [];
+  const totalPages=Math.max(1,Math.ceil(rows.length/pageSize));
+  const p=Math.min(Math.max(1,Number(page)||1),totalPages);
+  return {page:p,totalPages,total:rows.length,items:rows.slice((p-1)*pageSize,p*pageSize)};
+}
+function sources() {
+  return [SOURCE_URL,SECONDARY_SOURCE_URL,FALLBACK_SOURCE_URL].filter(Boolean).map((url,i)=>({
+    name:i===0?'primary':i===1?'secondary':'fallback',type:'http-json',active:i===activeSourceIndex,
+    status:i===activeSourceIndex?state.sourceStatus:'standby',lastUpdate:state.lastSourceSuccessAt,latencyMs:state.sourceLatencyMs,errorCount:state.errors
+  }));
+}
+
+async function test(
   const event = { id:'test-'+Date.now(), eggName:'Test Egg', itemName:'Test Rare Item', rarity:[...TRACKED][0] || 'SECRET', location:'Test Area', spawnedAt:Math.floor(Date.now()/1000), detectedAt:Math.floor(Date.now()/1000), value:'TEST ONLY', source:'test' };
-  return sendAlert(event, true);
+  return sendAlertWithRetry(event, true);
 }
 function recent() {
   return store()?.stealEggTracker?.recent || [];
@@ -273,4 +428,4 @@ function catalogInfo(name) {
   };
 }
 
-module.exports = { start, stop, status, processEvent, test, recent, catalogInfo, catalog: CATALOG.entries };
+module.exports = { start, stop, status, health, stats, recent, sources, test, processEvent, catalogInfo, configure, setEnabled, reload:()=>status(), catalog: CATALOG.entries };
