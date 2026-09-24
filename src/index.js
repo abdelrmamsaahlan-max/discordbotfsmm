@@ -19,7 +19,7 @@ async function panels(g){await panel(g,'🤝・middleman',E('🤝 FSMM MIDDLEMAN
 function input(id,label,style=TextInputStyle.Short,required=true,max=900){return new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(style).setRequired(required).setMaxLength(max)}
 function countTickets(g,u){const c=g.channels.cache.find(x=>x.type===ChannelType.GuildCategory&&x.name===CATEGORY);return c?c.children.cache.filter(x=>x.topic?.includes('FSMM_USER:'+u)).size:0}
 async function ticket(i,type,data){if(countTickets(i.guild,i.user.id)>=3)return i.editReply({content:'❌ You already have 3 open tickets.'});const r=await setup(i.guild),team=type==='middleman'?r.m:type==='base-painting'?r.p:r.s,slug=type==='middleman'?'middleman':type==='base-painting'?'base-painting':'support';const name=(i.user.username.replace(/[^a-z0-9-]/gi,'').slice(0,55)||i.user.id).toLowerCase();const c=await i.guild.channels.create({name:`${slug}-${name}`.slice(0,95),type:ChannelType.GuildText,parent:r.c.id,topic:`FSMM_USER:${i.user.id} TYPE:${type}`,permissionOverwrites:[{id:i.guild.roles.everyone.id,deny:[PermissionFlagsBits.ViewChannel]},{id:i.user.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]},{id:r.s.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]},{id:team.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]}]});await c.send({content:`<@${i.user.id}> <@&${team.id}>`,allowedMentions:{users:[i.user.id],roles:[team.id]},embeds:[E('🎫 FSMM '+type.toUpperCase()+' TICKET',Object.entries(data).map(([k,v])=>`**${k}:** ${clean(v,600)}`).join('\n'))],components:[btn()]});await i.editReply({content:`✅ Ticket created: ${c}`});log(i.guild,'TICKET OPENED',`**Ticket:** ${c}\n**User:** <@${i.user.id}>`)}
-function commands(){const a=[['ping','Check latency'],['help','Show commands'],['setup','Create FSMM panels'],['ticket','Create FSMM panels'],['membercount','Show member count'],['vouch','Add a vouch'],['vouches','Show vouches'],['leaderboard','Vouch leaderboard'],['stats','Show stats'],['transcript','Create transcript'],['warn','Warn member'],['warnings','Show warnings'],['ban','Ban member'],['unban','Unban user'],['kick','Kick member'],['timeout','Timeout member'],['untimeout','Remove timeout'],['clear','Delete messages'],['announce','Send announcement'],['giveaway','Start giveaway'],['eggtracker','Show egg tracker status'],['tracker','Manage automatic Steal an Egg tracker']];return a.map(([n,d])=>new SlashCommandBuilder().setName(n).setDescription(d).toJSON())}
+function commands(){const a=[['ping','Check latency'],['help','Show commands'],['setup','Create FSMM panels'],['ticket','Create FSMM panels'],['membercount','Show member count'],['vouch','Add a vouch'],['vouches','Show vouches'],['leaderboard','Vouch leaderboard'],['stats','Show stats'],['transcript','Create transcript'],['warn','Warn member'],['warnings','Show warnings'],['ban','Ban member'],['unban','Unban user'],['kick','Kick member'],['timeout','Timeout member'],['untimeout','Remove timeout'],['clear','Delete messages'],['announce','Send announcement'],['giveaway','Start giveaway'],['eggtracker','Show egg tracker status'],['tracker','Manage automatic Steal an Egg tracker'],['fsmmsetup','One-time setup for FSMM logs and audit logging'],['calculator','Calculate Brainrot income']];return a.map(([n,d])=>new SlashCommandBuilder().setName(n).setDescription(d).toJSON())}
 function addOpts(){return{user:o=>o.addUserOption(x=>x.setName('user').setDescription('User').setRequired(true)),reason:o=>o.addStringOption(x=>x.setName('reason').setDescription('Reason').setRequired(false))}}
 async function register(){
   if(!client.application?.id) throw new Error('Discord application is not ready');
@@ -91,27 +91,6 @@ async function register(){
   return {guildId,names,subs};
 }
 async function transcript(i){const ms=await i.channel.messages.fetch({limit:100});const txt=[...ms.values()].reverse().map(m=>`[${m.createdAt.toISOString()}] ${m.author.tag}: ${clean(m.content,2000)}`).join('\n');return i.editReply({content:'📄 Transcript',files:[new AttachmentBuilder(Buffer.from(txt||'No messages'),{name:`transcript-${Date.now()}.txt`})]})}
-async function verifySlashCommands(){
-  const rest=new REST({version:'10'}).setToken(TOKEN);
-  for(let attempt=1;attempt<=5;attempt++){
-    try{
-      const body=commands();
-      const map=new Map(body.map(x=>[x.name,x]));
-      const current=await rest.get(Routes.applicationGuildCommands(CLIENT_ID,GUILD_ID));
-      for(const c of current||[]) if(!map.has(c.name) && !['announce','transcript','craft','exit','exist'].includes(c.name)) map.set(c.name,c);
-      const finalBody=[...map.values()];
-      await rest.put(Routes.applicationGuildCommands(CLIENT_ID,GUILD_ID),{body:finalBody});
-      const verify=await rest.get(Routes.applicationGuildCommands(CLIENT_ID,GUILD_ID));
-      const names=new Set((verify||[]).map(x=>x.name));
-      const required=['tracker','ping','help','vouch','vouches','leaderboard','stats','membercount','calculator'];
-      const missing=required.filter(x=>!names.has(x));
-      console.log('[FSMM COMMAND VERIFY] attempt='+attempt+' registered='+verify.length+' missing='+ (missing.length?missing.join(','):'none'));
-      if(!missing.length) return true;
-    }catch(e){console.error('[FSMM COMMAND VERIFY] attempt='+attempt,e?.stack||e?.message||e)}
-    await new Promise(r=>setTimeout(r,3000));
-  }
-  return false;
-}
 client.once('ready',async()=>{console.log('[FSMM] ONLINE',client.user.tag);try{await register()}catch(e){console.error('[REGISTER]',e)}try{await verifySlashCommands()}catch(e){console.error('[VERIFY COMMANDS]',e)}try{stealEggTracker.start(client,{getStore:()=>store,markDirty:()=>{dirty=true;}})}catch(e){console.error('[TRACKER START]',e)}});
 client.on('interactionCreate',async i=>{try{
 if(i.isChatInputCommand()){store.commands[i.commandName]=(store.commands[i.commandName]||0)+1;dirty=true;const n=i.commandName;const slow=['setup','ticket','transcript','warn','warnings','ban','unban','kick','timeout','untimeout','clear','announce','giveaway'];if(slow.includes(n))await i.deferReply({flags:MessageFlags.Ephemeral});
