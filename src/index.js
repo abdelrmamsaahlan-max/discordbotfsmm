@@ -21,7 +21,75 @@ function countTickets(g,u){const c=g.channels.cache.find(x=>x.type===ChannelType
 async function ticket(i,type,data){if(countTickets(i.guild,i.user.id)>=3)return i.editReply({content:'❌ You already have 3 open tickets.'});const r=await setup(i.guild),team=type==='middleman'?r.m:type==='base-painting'?r.p:r.s,slug=type==='middleman'?'middleman':type==='base-painting'?'base-painting':'support';const name=(i.user.username.replace(/[^a-z0-9-]/gi,'').slice(0,55)||i.user.id).toLowerCase();const c=await i.guild.channels.create({name:`${slug}-${name}`.slice(0,95),type:ChannelType.GuildText,parent:r.c.id,topic:`FSMM_USER:${i.user.id} TYPE:${type}`,permissionOverwrites:[{id:i.guild.roles.everyone.id,deny:[PermissionFlagsBits.ViewChannel]},{id:i.user.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]},{id:r.s.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]},{id:team.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]}]});await c.send({content:`<@${i.user.id}> <@&${team.id}>`,allowedMentions:{users:[i.user.id],roles:[team.id]},embeds:[E('🎫 FSMM '+type.toUpperCase()+' TICKET',Object.entries(data).map(([k,v])=>`**${k}:** ${clean(v,600)}`).join('\n'))],components:[btn()]});await i.editReply({content:`✅ Ticket created: ${c}`});log(i.guild,'TICKET OPENED',`**Ticket:** ${c}\n**User:** <@${i.user.id}>`)}
 function commands(){const a=[['ping','Check latency'],['help','Show commands'],['setup','Create FSMM panels'],['ticket','Create FSMM panels'],['membercount','Show member count'],['vouch','Add a vouch'],['vouches','Show vouches'],['leaderboard','Vouch leaderboard'],['stats','Show stats'],['transcript','Create transcript'],['warn','Warn member'],['warnings','Show warnings'],['ban','Ban member'],['unban','Unban user'],['kick','Kick member'],['timeout','Timeout member'],['untimeout','Remove timeout'],['clear','Delete messages'],['announce','Send announcement'],['giveaway','Start giveaway'],['eggtracker','Show egg tracker status'],['tracker','Manage automatic Steal an Egg tracker']];return a.map(([n,d])=>new SlashCommandBuilder().setName(n).setDescription(d).toJSON())}
 function addOpts(){return{user:o=>o.addUserOption(x=>x.setName('user').setDescription('User').setRequired(true)),reason:o=>o.addStringOption(x=>x.setName('reason').setDescription('Reason').setRequired(false))}}
-async function register(){if(!client.application?.id)throw new Error('Discord application is not ready');const body=commands();const map=new Map(body.map(x=>[x.name,x]));const edit=(n,fn)=>{const x=map.get(n);if(x)fn(x)};edit('vouch',x=>{x.options=[{type:6,name:'user',description:'User',required:true},{type:3,name:'service',description:'Service',required:true}]});edit('vouches',x=>{x.options=[{type:6,name:'user',description:'User',required:false}]});edit('stats',x=>{x.options=[{type:6,name:'user',description:'User',required:false}]});edit('warn',x=>{x.default_member_permissions=PermissionFlagsBits.ModerateMembers.toString();x.options=[{type:6,name:'user',description:'Member',required:true},{type:3,name:'reason',description:'Reason',required:true}]});edit('warnings',x=>{x.options=[{type:6,name:'user',description:'Member',required:true}]});edit('ban',x=>{x.default_member_permissions=PermissionFlagsBits.BanMembers.toString();x.options=[{type:6,name:'user',description:'Member',required:true},{type:3,name:'reason',description:'Reason',required:false}]});edit('unban',x=>{x.default_member_permissions=PermissionFlagsBits.BanMembers.toString();x.options=[{type:3,name:'user_id',description:'User ID',required:true}]});edit('kick',x=>{x.default_member_permissions=PermissionFlagsBits.KickMembers.toString();x.options=[{type:6,name:'user',description:'Member',required:true},{type:3,name:'reason',description:'Reason',required:false}]});edit('timeout',x=>{x.default_member_permissions=PermissionFlagsBits.ModerateMembers.toString();x.options=[{type:6,name:'user',description:'Member',required:true},{type:4,name:'minutes',description:'Minutes',required:true,min_value:1,max_value:40320}]});edit('untimeout',x=>{x.options=[{type:6,name:'user',description:'Member',required:true}]});edit('clear',x=>{x.default_member_permissions=PermissionFlagsBits.ManageMessages.toString();x.options=[{type:4,name:'amount',description:'1-100',required:true,min_value:1,max_value:100}]});edit('announce',x=>{x.options=[{type:3,name:'message',description:'Message',required:true}]});edit('giveaway',x=>{x.options=[{type:4,name:'minutes',description:'Minutes',required:true,min_value:1,max_value:10080},{type:3,name:'prize',description:'Prize',required:true}]});edit('tracker',x=>{x.options=[{type:1,name:'status',description:'Show tracker status and counters',options:[]},{type:1,name:'setup',description:'Configure the tracker',options:[{type:7,name:'channel',description:'Alert channel',required:true,channel_types:[0,5]},{type:8,name:'role',description:'General alert role',required:false},{type:3,name:'rarities',description:'Tracked rarities',required:false,choices:[{name:'All rare tiers',value:'DIVINE,ETERNAL,SECRET'},{name:'Divine only',value:'DIVINE'},{name:'Eternal only',value:'ETERNAL'},{name:'Secret only',value:'SECRET'},{name:'Divine + Eternal',value:'DIVINE,ETERNAL'},{name:'Divine + Secret',value:'DIVINE,SECRET'},{name:'Eternal + Secret',value:'ETERNAL,SECRET'}]},{type:3,name:'style',description:'Alert style',required:false,choices:[{name:'Professional',value:'professional'},{name:'Compact',value:'compact'}]}]},{type:1,name:'config',description:'Show current configuration',options:[]},{type:1,name:'test',description:'Send a test alert',options:[{type:3,name:'rarity',description:'Test rarity',required:false,choices:[{name:'Divine',value:'DIVINE'},{name:'Eternal',value:'ETERNAL'},{name:'Secret',value:'SECRET'}]}]},{type:1,name:'recent',description:'Show recent detected spawns',options:[{type:4,name:'page',description:'Page number',required:false,min_value:1}]},{type:1,name:'stats',description:'Show tracker statistics',options:[{type:3,name:'period',description:'Statistics period',required:false,choices:[{name:'Today',value:'today'},{name:'24 hours',value:'24h'},{name:'7 days',value:'7d'},{name:'30 days',value:'30d'},{name:'All time',value:'all'}]}]},{type:1,name:'health',description:'Show detailed tracker diagnostics',options:[]},{type:1,name:'sources',description:'Show configured data sources',options:[]},{type:1,name:'enable',description:'Enable tracker monitoring',options:[]},{type:1,name:'disable',description:'Disable tracker alerts without stopping the bot',options:[]},{type:1,name:'reload',description:'Reload tracker configuration',options:[]},{type:1,name:'help',description:'Show tracker command help',options:[]},{type:1,name:'info',description:'Look up a known rare pet',options:[{type:3,name:'name',description:'Pet or egg name',required:true}]}]});const expected=[...map.values()];const registered=await client.application.commands.set(expected,GUILD_ID);const names=registered.map(c=>c.name).sort();console.log('[FSMM] guild commands registered:',names.length,names.join(', '));const tracker=registered.find(c=>c.name==='tracker');if(!tracker)throw new Error('Verification failed: /tracker was not returned by Discord after registration');const trackerSubs=tracker.options?.filter(o=>o.type===1).map(o=>o.name)||[];console.log('[FSMM] /tracker subcommands:',trackerSubs.join(', '));if(!trackerSubs.includes('status')||!trackerSubs.includes('setup')||!trackerSubs.includes('test')||!trackerSubs.includes('recent')||!trackerSubs.includes('stats')||!trackerSubs.includes('health')||!trackerSubs.includes('sources')||!trackerSubs.includes('enable')||!trackerSubs.includes('disable')||!trackerSubs.includes('reload')||!trackerSubs.includes('help')||!trackerSubs.includes('info'))throw new Error('Verification failed: /tracker is missing one or more subcommands');}
+async function register(){
+  if(!client.application?.id) throw new Error('Discord application is not ready');
+  const guildId=String(GUILD_ID||'').trim();
+  if(!/^\\d{17,20}$/.test(guildId)) throw new Error('Invalid GUILD_ID: '+guildId);
+  const guild=await client.guilds.fetch(guildId).catch(e=>{throw new Error('Cannot access GUILD_ID '+guildId+': '+e.message)});
+  if(!guild) throw new Error('Guild not found: '+guildId);
+
+  const body=commands();
+  const map=new Map(body.map(x=>[x.name,x]));
+  const edit=(n,fn)=>{const x=map.get(n);if(x)fn(x)};
+
+  edit('vouch',x=>{x.options=[{type:6,name:'user',description:'User',required:true},{type:3,name:'service',description:'Service',required:true}]});
+  edit('vouches',x=>{x.options=[{type:6,name:'user',description:'User',required:false}]});
+  edit('stats',x=>{x.options=[{type:6,name:'user',description:'User',required:false}]});
+  edit('warn',x=>{x.default_member_permissions=PermissionFlagsBits.ModerateMembers.toString();x.options=[{type:6,name:'user',description:'Member',required:true},{type:3,name:'reason',description:'Reason',required:true}]});
+  edit('warnings',x=>{x.options=[{type:6,name:'user',description:'Member',required:true}]});
+  edit('ban',x=>{x.default_member_permissions=PermissionFlagsBits.BanMembers.toString();x.options=[{type:6,name:'user',description:'Member',required:true},{type:3,name:'reason',description:'Reason',required:false}]});
+  edit('unban',x=>{x.default_member_permissions=PermissionFlagsBits.BanMembers.toString();x.options=[{type:3,name:'user_id',description:'User ID',required:true}]});
+  edit('kick',x=>{x.default_member_permissions=PermissionFlagsBits.KickMembers.toString();x.options=[{type:6,name:'user',description:'Member',required:true},{type:3,name:'reason',description:'Reason',required:false}]});
+  edit('timeout',x=>{x.default_member_permissions=PermissionFlagsBits.ModerateMembers.toString();x.options=[{type:6,name:'user',description:'Member',required:true},{type:4,name:'minutes',description:'Minutes',required:true,min_value:1,max_value:40320}]});
+  edit('untimeout',x=>{x.options=[{type:6,name:'user',description:'Member',required:true}]});
+  edit('clear',x=>{x.default_member_permissions=PermissionFlagsBits.ManageMessages.toString();x.options=[{type:4,name:'amount',description:'1-100',required:true,min_value:1,max_value:100}]});
+  edit('announce',x=>{x.options=[{type:3,name:'message',description:'Message',required:true}]});
+  edit('giveaway',x=>{x.options=[{type:4,name:'minutes',description:'Minutes',required:true,min_value:1,max_value:10080},{type:3,name:'prize',description:'Prize',required:true}]});
+  edit('tracker',x=>{x.options=[
+    {type:1,name:'status',description:'Show tracker status and counters',options:[]},
+    {type:1,name:'setup',description:'Configure the tracker',options:[{type:7,name:'channel',description:'Alert channel',required:true,channel_types:[0,5]},{type:8,name:'role',description:'General alert role',required:false},{type:3,name:'rarities',description:'Tracked rarities',required:false,choices:[{name:'All rare tiers',value:'DIVINE,ETERNAL,SECRET'},{name:'Divine only',value:'DIVINE'},{name:'Eternal only',value:'ETERNAL'},{name:'Secret only',value:'SECRET'},{name:'Divine + Eternal',value:'DIVINE,ETERNAL'},{name:'Divine + Secret',value:'DIVINE,SECRET'},{name:'Eternal + Secret',value:'ETERNAL,SECRET'}]},{type:3,name:'style',description:'Alert style',required:false,choices:[{name:'Professional',value:'professional'},{name:'Compact',value:'compact'}]}]},
+    {type:1,name:'config',description:'Show current configuration',options:[]},
+    {type:1,name:'test',description:'Send a test alert',options:[{type:3,name:'rarity',description:'Test rarity',required:false,choices:[{name:'Divine',value:'DIVINE'},{name:'Eternal',value:'ETERNAL'},{name:'Secret',value:'SECRET'}]}]},
+    {type:1,name:'recent',description:'Show recent detected spawns',options:[{type:4,name:'page',description:'Page number',required:false,min_value:1}]},
+    {type:1,name:'stats',description:'Show tracker statistics',options:[{type:3,name:'period',description:'Statistics period',required:false,choices:[{name:'Today',value:'today'},{name:'24 hours',value:'24h'},{name:'7 days',value:'7d'},{name:'30 days',value:'30d'},{name:'All time',value:'all'}]}]},
+    {type:1,name:'health',description:'Show detailed tracker diagnostics',options:[]},
+    {type:1,name:'sources',description:'Show configured data sources',options:[]},
+    {type:1,name:'enable',description:'Enable tracker monitoring',options:[]},
+    {type:1,name:'disable',description:'Disable tracker alerts without stopping the bot',options:[]},
+    {type:1,name:'reload',description:'Reload tracker configuration',options:[]},
+    {type:1,name:'help',description:'Show tracker command help',options:[]},
+    {type:1,name:'info',description:'Look up a known rare pet',options:[{type:3,name:'name',description:'Pet or egg name',required:true}]}
+  ]});
+
+  const expected=[...map.values()];
+  const rest=new REST({version:'10'}).setToken(TOKEN);
+  let registered=null;
+  let lastError=null;
+  for(let attempt=1;attempt<=3;attempt++){
+    try{
+      registered=await rest.put(Routes.applicationGuildCommands(client.application.id,guildId),{body:expected});
+      break;
+    }catch(e){
+      lastError=e;
+      console.error('[REGISTER] attempt '+attempt+'/3 failed:',e.stack||e.message);
+      if(attempt<3) await new Promise(r=>setTimeout(r,1500*attempt));
+    }
+  }
+  if(!registered) throw lastError||new Error('Discord command registration failed');
+
+  const names=(Array.isArray(registered)?registered:[]).map(x=>x.name).sort();
+  console.log('[FSMM] GUILD:',guild.name,guild.id);
+  console.log('[FSMM] APPLICATION:',client.application.id);
+  console.log('[FSMM] REGISTERED COMMANDS:',names.length,names.join(', '));
+  const tracker=registered.find(c=>c.name==='tracker');
+  if(!tracker) throw new Error('Verification failed: Discord did not return /tracker');
+  const subs=tracker.options?.filter(o=>o.type===1).map(o=>o.name)||[];
+  const required=['status','setup','config','test','recent','stats','health','sources','enable','disable','reload','help','info'];
+  const missing=required.filter(x=>!subs.includes(x));
+  if(missing.length) throw new Error('Verification failed: /tracker missing: '+missing.join(', '));
+  console.log('[FSMM] VERIFIED /tracker:',subs.join(', '));
+  return {guildId,names,subs};
+}
 async function transcript(i){const ms=await i.channel.messages.fetch({limit:100});const txt=[...ms.values()].reverse().map(m=>`[${m.createdAt.toISOString()}] ${m.author.tag}: ${clean(m.content,2000)}`).join('\n');return i.editReply({content:'📄 Transcript',files:[new AttachmentBuilder(Buffer.from(txt||'No messages'),{name:`transcript-${Date.now()}.txt`})]})}
 async function verifySlashCommands(){
   const rest=new REST({version:'10'}).setToken(TOKEN);
