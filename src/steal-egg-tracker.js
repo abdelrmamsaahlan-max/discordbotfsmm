@@ -122,24 +122,39 @@ function enqueue(task) {
   alertQueue = run.catch(() => {});
   return run;
 }
+function ensureTrackerStore() {
+  const s = store(); if (!s) return null;
+  s.stealEggTracker ||= { schemaVersion: 2, processed: {}, recent: [], history: [], stats: {}, config: {} };
+  s.stealEggTracker.schemaVersion ||= 2;
+  s.stealEggTracker.processed ||= {};
+  s.stealEggTracker.recent ||= [];
+  s.stealEggTracker.history ||= [];
+  s.stealEggTracker.stats ||= {};
+  s.stealEggTracker.config ||= {};
+  return s;
+}
 function remember(event, alertMessageId) {
-  const s = store();
+  const s = ensureTrackerStore();
   if (!s) return;
-  s.stealEggTracker ||= { processed: {}, recent: [], stats: {} };
   s.stealEggTracker.processed[event.id] = Date.now();
-  s.stealEggTracker.recent = [event, ...(s.stealEggTracker.recent || [])].slice(0, 50);
+  s.stealEggTracker.recent = [event, ...(s.stealEggTracker.recent || [])].slice(0, 100);
+  s.stealEggTracker.history = [event, ...(s.stealEggTracker.history || [])].slice(0, 5000);
   s.stealEggTracker.stats = state;
   if (alertMessageId) s.stealEggTracker.processed[event.id] = { at: Date.now(), alertMessageId };
   if (typeof markDirty === 'function') markDirty();
 }
 function prune() {
-  const s = store();
+  const s = ensureTrackerStore();
   if (!s?.stealEggTracker?.processed) return;
   const cutoff = Date.now() - RETENTION_DAYS * 86400000;
   for (const [id,v] of Object.entries(s.stealEggTracker.processed)) {
     const at = typeof v === 'object' ? v.at : v;
     if (at < cutoff) delete s.stealEggTracker.processed[id];
   }
+  const cutoffSec = Math.floor(cutoff / 1000);
+  s.stealEggTracker.recent = (s.stealEggTracker.recent || []).filter(x => !x.spawnedAt || x.spawnedAt >= cutoffSec).slice(0, 100);
+  s.stealEggTracker.history = (s.stealEggTracker.history || []).filter(x => !x.spawnedAt || x.spawnedAt >= cutoffSec).slice(0, 5000);
+  if (typeof markDirty === 'function') markDirty();
 }
 function signatureOk(req, raw) {
   if (!WEBHOOK_SECRET) return true;
@@ -400,7 +415,7 @@ function stats(period='all') {
     averageDetectionLatencyMs:lat.length?Math.round(lat.reduce((a,b)=>a+b,0)/lat.length):0};
 }
 function recent(page=1,pageSize=5) {
-  const rows=store()?.stealEggTracker?.recent || [];
+  const rows=store()?.stealEggTracker?.history || store()?.stealEggTracker?.recent || [];
   const totalPages=Math.max(1,Math.ceil(rows.length/pageSize));
   const p=Math.min(Math.max(1,Number(page)||1),totalPages);
   return {page:p,totalPages,total:rows.length,items:rows.slice((p-1)*pageSize,p*pageSize)};
