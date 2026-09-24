@@ -51,7 +51,7 @@ if(n==='ping')return i.reply({content:`🏓 Pong! ${client.ws.ping}ms`,flags:Mes
     const s=stealEggTracker.status(), h=stealEggTracker.health();
     return i.reply({embeds:[E('⚙️ TRACKER CONFIG','**Alert Channel:** '+(s.channelId?'<#'+s.channelId+'>':'Not configured')+'\n**Alert Role:** '+(s.roleId?'<@&'+s.roleId+'>':'Not configured')+'\n**Tracked Rarities:** '+s.trackedRarities.join(', ')+'\n**Enabled:** '+(s.enabled?'Yes':'No')+'\n**Images:** '+(s.images?'Yes':'No')+'\n**Location:** '+(s.location?'Yes':'No')+'\n**Expiration:** '+(s.expiration?'Yes':'No')+'\n**Data Source:** '+(s.sourceConfigured?'Configured':'Not configured')+'\n**Polling:** '+s.pollIntervalMs+'ms\n**Strict Catalog:** '+(s.strictCatalog?'Yes':'No')+'\n**Health:** '+h.tracker)],flags:MessageFlags.Ephemeral});
   }
-  if(sub==='test'){await stealEggTracker.test(i.options.getString('rarity'));return i.reply({content:'🧪 Test alert sent. It was not stored as a real spawn.',flags:MessageFlags.Ephemeral});}
+  if(sub==='test'){await i.deferReply({flags:MessageFlags.Ephemeral});try{await stealEggTracker.test(i.options.getString('rarity'));return i.editReply({content:'🧪 Test alert sent. It was not stored as a real spawn.'});}catch(e){console.error('[TRACKER TEST]',e.stack||e.message);return i.editReply({content:'❌ Test alert failed: '+clean(e.message,300)});}}
   if(sub==='recent'){
     const page=stealEggTracker.recentPage(i.options.getInteger('page')||1,5);
     const body=page.items.length?page.items.map(x=>'**'+x.rarity+'** • '+x.eggName+(x.itemName?' → '+x.itemName:'')+(x.location?' • '+x.location:'')+'\n<t:'+x.spawnedAt+':R>').join('\n\n'):'No detected spawns yet.';
