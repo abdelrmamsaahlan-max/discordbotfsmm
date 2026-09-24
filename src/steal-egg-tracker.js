@@ -163,8 +163,9 @@ function signatureOk(req, raw) {
   return got.length === expected.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(expected));
 }
 async function sendAlert(event, test = false) {
-  if (!clientRef || !CHANNEL_ID) throw new Error('Alert channel is not configured');
-  const channel = await clientRef.channels.fetch(CHANNEL_ID);
+  const c = trackerConfig();
+  if (!clientRef || !c.channelId) throw new Error('Alert channel is not configured');
+  const channel = await clientRef.channels.fetch(c.channelId);
   if (!channel?.isTextBased()) throw new Error('Alert channel is not text based');
   const colors = { DIVINE: 0xf59e0b, ETERNAL: 0x8b5cf6, SECRET: 0x22c55e };
   const fields = [
@@ -172,7 +173,7 @@ async function sendAlert(event, test = false) {
     { name: '🥚 Egg', value: event.eggName, inline: true }
   ];
   if (event.itemName) fields.push({ name: '🎁 Spawn', value: event.itemName, inline: true });
-  if (event.location) fields.push({ name: '📍 Location', value: event.location, inline: true });
+  if (c.location && event.location) fields.push({ name: '📍 Location', value: event.location, inline: true });
   if (event.catalogBaseIncome) fields.push({ name: '💰 Base Income', value: CATALOG.formatMoney(event.catalogBaseIncome), inline: true });
   if (event.value != null && String(event.value).trim()) fields.push({ name: '📡 Source $/s', value: clean(event.value,120), inline: true });
   if (event.verificationStatus === 'disputed' || event.verificationStatus === 'mismatch' || event.warnings?.length) {
@@ -180,16 +181,17 @@ async function sendAlert(event, test = false) {
   }
   fields.push({ name: '⏰ Spawned', value: `<t:${event.spawnedAt}:F>\n<t:${event.spawnedAt}:R>`, inline: true });
   fields.push({ name: '🔎 Detected', value: `<t:${event.detectedAt}:R>`, inline: true });
-  if (event.expiresAt) fields.push({ name: '⏳ Expires', value: `<t:${event.expiresAt}:R>`, inline: true });
+  if (c.expiration && event.expiresAt) fields.push({ name: '⏳ Expires', value: `<t:${event.expiresAt}:R>`, inline: true });
   const embed = new EmbedBuilder()
     .setTitle(test ? '🧪 TEST — ' + event.rarity + ' SPAWN' : '🥚 ' + event.rarity + ' SPAWN DETECTED')
     .addFields(fields)
     .setColor(colors[event.rarity] || 0x5865f2)
     .setFooter({ text: 'Steal an Egg Tracker • Automatic Spawn Detection' })
     .setTimestamp();
-  if (event.imageUrl && /^https?:\/\//i.test(event.imageUrl)) embed.setThumbnail(event.imageUrl);
-  const content = ROLE_ID && !test ? `<@&${ROLE_ID}>` : undefined;
-  const msg = await channel.send({ content, allowedMentions: ROLE_ID && !test ? { roles: [ROLE_ID] } : { parse: [] }, embeds: [embed] });
+  if (c.images && event.imageUrl && /^https?:\/\//i.test(event.imageUrl)) embed.setThumbnail(event.imageUrl);
+  const roleId = rarityRoleId(event.rarity);
+  const content = roleId && !test ? `<@&${roleId}>` : undefined;
+  const msg = await channel.send({ content, allowedMentions: roleId && !test ? { roles: [roleId] } : { parse: [] }, embeds: [embed] });
   return msg;
 }
 
@@ -208,6 +210,7 @@ async function sendAlertWithRetry(event, test = false) {
 
 async function processEvent(raw) {
   state.totalEvents++;
+  if (!state.enabled) return { ok: true, ignored: true, reason: 'disabled' };
   const event = normalize(raw);
   if (!event) return { ok: true, ignored: true };
   if (CATALOG_STRICT && event.verificationStatus === 'unknown') {
