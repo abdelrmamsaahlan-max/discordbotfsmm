@@ -42,3 +42,13 @@ test('same event fields produce a deterministic fallback identity', () => {
   const b = tracker.normalize({eggName:'Kraken Egg',itemName:'Kraken',rarity:'SECRET',location:'Abyss Ocean',spawnedAt:1790000000});
   assert.equal(a.id, b.id);
 });
+
+
+test('tracker rejects future events instead of alerting them', async () => {
+  const result = await tracker.processEvent({
+    id: 'future-test-' + Date.now(),
+    eggName: 'Kraken Egg', itemName: 'Kraken', rarity: 'SECRET', location: 'Abyss Ocean',
+    spawnedAt: Math.floor(Date.now() / 1000) + 3600
+  });
+  assert.equal(result.reason, 'future-event');
+});
