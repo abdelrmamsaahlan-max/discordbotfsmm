@@ -24,7 +24,7 @@ function addOpts(){return{user:o=>o.addUserOption(x=>x.setName('user').setDescri
 async function register(){
   if(!client.application?.id) throw new Error('Discord application is not ready');
   const guildId=String(GUILD_ID||'').trim();
-  if(!/^\\d{17,20}$/.test(guildId)) throw new Error('Invalid GUILD_ID: '+guildId);
+  if(!/^\d{17,20}$/.test(guildId)) throw new Error('Invalid GUILD_ID: '+guildId);
   const guild=await client.guilds.fetch(guildId).catch(e=>{throw new Error('Cannot access GUILD_ID '+guildId+': '+e.message)});
   if(!guild) throw new Error('Guild not found: '+guildId);
 
@@ -92,7 +92,7 @@ async function register(){
   return {guildId,names,subs};
 }
 async function transcript(i){const ms=await i.channel.messages.fetch({limit:100});const txt=[...ms.values()].reverse().map(m=>`[${m.createdAt.toISOString()}] ${m.author.tag}: ${clean(m.content,2000)}`).join('\n');return i.editReply({content:'📄 Transcript',files:[new AttachmentBuilder(Buffer.from(txt||'No messages'),{name:`transcript-${Date.now()}.txt`})]})}
-client.once('ready',async()=>{console.log('[FSMM] ONLINE',client.user.tag);try{await register()}catch(e){console.error('[REGISTER]',e)}try{await verifySlashCommands()}catch(e){console.error('[VERIFY COMMANDS]',e)}try{stealEggTracker.start(client,{getStore:()=>store,markDirty:()=>{dirty=true;}})}catch(e){console.error('[TRACKER START]',e)}});
+client.once('ready',async()=>{console.log('[FSMM] ONLINE',client.user.tag);try{await register()}catch(e){console.error('[REGISTER]',e)}try{stealEggTracker.start(client,{getStore:()=>store,markDirty:()=>{dirty=true;}})}catch(e){console.error('[TRACKER START]',e)}});
 client.on('interactionCreate',async i=>{try{
 if(i.isChatInputCommand()){store.commands[i.commandName]=(store.commands[i.commandName]||0)+1;dirty=true;const n=i.commandName;const slow=['setup','ticket','transcript','warn','warnings','ban','unban','kick','timeout','untimeout','clear','announce','giveaway'];if(slow.includes(n))await i.deferReply({flags:MessageFlags.Ephemeral});
 if(n==='ping')return i.reply({content:`🏓 Pong! ${client.ws.ping}ms`,flags:MessageFlags.Ephemeral});if(n==='help')return i.reply({content:'FSMM: /setup /ticket /vouch /vouches /leaderboard /stats /transcript /warn /warnings /ban /unban /kick /timeout /untimeout /clear /announce /giveaway /tracker',flags:MessageFlags.Ephemeral});if(n==='eggtracker'){const s=stealEggTracker.status();return i.reply({embeds:[E('🥚 FSMM EGG TRACKER','**Status:** '+(s.running?'ONLINE':'OFFLINE')+'\n**Source:** '+(s.sourceOnline?'ONLINE':(s.sourceConfigured?'OFFLINE':'NOT CONFIGURED'))+'\n**Tracked:** '+s.trackedRarities.join(', ')+'\n**Alerts:** '+s.alerts+'\n**Duplicates:** '+s.duplicates+'\n**Last spawn:** '+(s.lastSpawn?s.lastSpawn.eggName+' — '+s.lastSpawn.rarity:'None yet'))],flags:MessageFlags.Ephemeral})}if(n==='tracker'){
