@@ -54,6 +54,7 @@ async function register(){
     {type:1,name:'stats',description:'Show tracker statistics',options:[{type:3,name:'period',description:'Statistics period',required:false,choices:[{name:'Today',value:'today'},{name:'24 hours',value:'24h'},{name:'7 days',value:'7d'},{name:'30 days',value:'30d'},{name:'All time',value:'all'}]}]},
     {type:1,name:'health',description:'Show detailed tracker diagnostics',options:[]},
     {type:1,name:'sources',description:'Show configured data sources',options:[]},
+    {type:1,name:'sourcecheck',description:'Run an immediate source check',options:[]},
     {type:1,name:'enable',description:'Enable tracker monitoring',options:[]},
     {type:1,name:'disable',description:'Disable tracker alerts without stopping the bot',options:[]},
     {type:1,name:'reload',description:'Reload tracker configuration',options:[]},
@@ -96,9 +97,9 @@ client.on('interactionCreate',async i=>{try{
 if(i.isChatInputCommand()){store.commands[i.commandName]=(store.commands[i.commandName]||0)+1;dirty=true;const n=i.commandName;const slow=['setup','ticket','transcript','warn','warnings','ban','unban','kick','timeout','untimeout','clear','announce','giveaway'];if(slow.includes(n))await i.deferReply({flags:MessageFlags.Ephemeral});
 if(n==='ping')return i.reply({content:`🏓 Pong! ${client.ws.ping}ms`,flags:MessageFlags.Ephemeral});if(n==='help')return i.reply({content:'FSMM: /setup /ticket /vouch /vouches /leaderboard /stats /transcript /warn /warnings /ban /unban /kick /timeout /untimeout /clear /announce /giveaway /tracker',flags:MessageFlags.Ephemeral});if(n==='eggtracker'){const s=stealEggTracker.status();return i.reply({embeds:[E('🥚 FSMM EGG TRACKER','**Status:** '+(s.running?'ONLINE':'OFFLINE')+'\n**Source:** '+(s.sourceOnline?'ONLINE':(s.sourceConfigured?'OFFLINE':'NOT CONFIGURED'))+'\n**Tracked:** '+s.trackedRarities.join(', ')+'\n**Alerts:** '+s.alerts+'\n**Duplicates:** '+s.duplicates+'\n**Last spawn:** '+(s.lastSpawn?s.lastSpawn.eggName+' — '+s.lastSpawn.rarity:'None yet'))],flags:MessageFlags.Ephemeral})}if(n==='tracker'){
   const sub=i.options.getSubcommand(true);
-  const admin=new Set(['setup','config','test','enable','disable','reload']);
+  const admin=new Set(['setup','config','test','sourcecheck','enable','disable','reload']);
   if(admin.has(sub) && !staff(i)) return i.reply({content:'❌ Staff only.',flags:MessageFlags.Ephemeral});
-  if(sub==='help') return i.reply({embeds:[E('🥚 STEAL AN EGG TRACKER','**/tracker status** — live dashboard\n**/tracker setup** — configure alert channel, role, rarities and style\n**/tracker config** — show safe configuration\n**/tracker test** — send a test alert\n**/tracker recent** — recent real detections\n**/tracker stats** — detection statistics\n**/tracker health** — diagnostics\n**/tracker sources** — source status\n**/tracker enable / disable** — control tracker monitoring\n**/tracker reload** — reload configuration\n**/tracker info** — inspect the validation database')],flags:MessageFlags.Ephemeral});
+  if(sub==='help') return i.reply({embeds:[E('🥚 STEAL AN EGG TRACKER','**/tracker status** — live dashboard\n**/tracker setup** — configure alert channel, role, rarities and style\n**/tracker config** — show safe configuration\n**/tracker test** — send a test alert\n**/tracker recent** — recent real detections\n**/tracker stats** — detection statistics\n**/tracker health** — diagnostics\n**/tracker sources** — source status\n**/tracker sourcecheck** — test the live source immediately (staff)\n**/tracker enable / disable** — control tracker monitoring\n**/tracker reload** — reload configuration\n**/tracker info** — inspect the validation database')],flags:MessageFlags.Ephemeral});
   if(sub==='status'){
     const s=stealEggTracker.status(), h=stealEggTracker.health();
     const icon=v=>v==='online'||v==='connected'?'🟢':v==='disabled'?'⚪':v==='offline'?'🔴':'🟡';
@@ -133,6 +134,20 @@ if(n==='ping')return i.reply({content:`🏓 Pong! ${client.ws.ping}ms`,flags:Mes
   if(sub==='health'){
     const h=stealEggTracker.health();
     return i.reply({embeds:[E('🩺 TRACKER HEALTH','**Tracker:** '+h.tracker+'\n**Source:** '+h.source+'\n**Database:** '+h.database+'\n**Discord:** '+h.discord+'\n**Source latency:** '+(h.sourceLatencyMs??'Unknown')+'ms\n**Last request:** '+(h.lastRequestAt?'<t:'+Math.floor(h.lastRequestAt/1000)+':R>':'None')+'\n**Last event:** '+(h.lastEventAt?'<t:'+Math.floor(h.lastEventAt/1000)+':R>':'None')+'\n**Failed alerts:** '+h.failedAlerts+'\n**Retries:** '+h.retries+'\n**Errors:** '+h.errors+'\n**Memory:** '+Math.round(h.memory/1024/1024)+'MB')],flags:MessageFlags.Ephemeral});
+  }
+  if(sub==='sourcecheck'){
+    await i.deferReply({flags:MessageFlags.Ephemeral});
+    try {
+      const result=await stealEggTracker.checkSource();
+      return i.editReply({embeds:[E('🔎 TRACKER SOURCE CHECK',
+        '**Result:** '+(result.ok?'🟢 Source reachable':'🔴 Source failed')+'\n'+
+        '**Source:** '+result.source+'\n'+
+        '**Events returned:** '+result.events+'\n'+
+        '**Latency:** '+(result.latencyMs??'Unknown')+'ms'+
+        (result.error?'\n**Error:** '+clean(result.error,500):''))]});
+    } catch(e) {
+      return i.editReply({content:'❌ Source check failed: '+clean(e.message,500)});
+    }
   }
   if(sub==='sources'){
     const list=stealEggTracker.sources();
