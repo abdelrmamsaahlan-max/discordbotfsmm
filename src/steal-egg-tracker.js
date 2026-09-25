@@ -439,6 +439,29 @@ function recent(page=1,pageSize=5) {
   const p=Math.min(Math.max(1,Number(page)||1),totalPages);
   return {page:p,totalPages,total:rows.length,items:rows.slice((p-1)*pageSize,p*pageSize)};
 }
+async function checkSource() {
+  const urls = [SOURCE_URL, SECONDARY_SOURCE_URL, FALLBACK_SOURCE_URL].filter(Boolean);
+  if (!urls.length) return { ok:false, source:'not configured', events:0, latencyMs:null, error:'No source URL configured' };
+  const startIndex = activeSourceIndex % urls.length;
+  let lastError = null;
+  for (let attempt = 0; attempt < urls.length; attempt++) {
+    const index = (startIndex + attempt) % urls.length;
+    const started = Date.now();
+    try {
+      const events = await fetchFeed(urls[index]);
+      activeSourceIndex = index;
+      state.source = index===0?'primary':index===1?'secondary':'fallback';
+      state.sourceStatus = 'online';
+      consecutiveSourceFailures = 0;
+      return { ok:true, source:state.source, events:Array.isArray(events)?events.length:0, latencyMs:Date.now()-started, error:null };
+    } catch (e) {
+      lastError = e.message;
+    }
+  }
+  state.sourceOnline = false;
+  state.sourceStatus = 'offline';
+  return { ok:false, source:'all configured sources', events:0, latencyMs:null, error:lastError || 'Unknown source error' };
+}
 function sources() {
   return [SOURCE_URL,SECONDARY_SOURCE_URL,FALLBACK_SOURCE_URL].filter(Boolean).map((url,i)=>({
     name:i===0?'primary':i===1?'secondary':'fallback',type:'http-json',active:i===activeSourceIndex,
@@ -475,4 +498,4 @@ function reload() {
   if (!state.enabled) state.sourceStatus = 'disabled';
   return status();
 }
-module.exports = { start, stop, status, health, stats, recent, recentPage, sources, test, processEvent, normalize, configure, setEnabled, reload, catalogInfo, catalog: CATALOG.entries };
+module.exports = { start, stop, status, health, stats, recent, recentPage, sources, checkSource, test, processEvent, normalize, configure, setEnabled, reload, catalogInfo, catalog: CATALOG.entries };
