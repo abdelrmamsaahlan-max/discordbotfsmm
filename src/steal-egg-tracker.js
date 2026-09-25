@@ -63,11 +63,11 @@ function normalize(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const r = rarity(raw.rarity || raw.tier);
   const egg = clean(raw.eggName || raw.egg || raw.egg_name || raw.name, 120);
-  const item = clean(raw.itemName || raw.item || raw.spawn || raw.reward || raw.content || '', 160);
-  const location = clean(raw.location || raw.area || raw.zone || '', 120);
-  const spawnedAt = unix(raw.spawnedAt || raw.spawned_at || raw.timestamp || raw.time);
+  const item = clean(raw.itemName || raw.item || raw.spawn || raw.reward || raw.content || raw.pet || raw.species || '', 160);
+  const location = clean(raw.location || raw.area || raw.zone || raw.world || raw.region || '', 120);
+  const spawnedAt = unix(raw.spawnedAt || raw.spawned_at || raw.timestamp || raw.time || raw.createdAt || raw.created_at);
   if (!r || !egg || !spawnedAt) return null;
-  const id = clean(raw.id || raw.eventId || raw.event_id ||
+  const id = clean(raw.id || raw.eventId || raw.event_id || raw.spawnId || raw.spawn_id ||
     crypto.createHash('sha256').update([egg,item,r,location,spawnedAt].join('|')).digest('hex'), 128);
   const catalog = CATALOG.find(item || egg);
   let verifiedRarity = r;
@@ -96,6 +96,7 @@ function normalize(raw) {
     value: raw.value ?? raw.moneyPerSecond ?? raw.money_per_second ?? null,
     imageUrl: clean(raw.imageUrl || raw.image_url || '', 1000) || null,
     source: clean(raw.source || 'external-feed', 80),
+    detectionLatencyMs: Math.max(0, Date.now() - spawnedAt * 1000),
     verificationStatus, warnings,
     catalogName: catalog?.name || null,
     catalogRarity: catalog?.rarity || null,
@@ -148,7 +149,7 @@ function remember(event, alertMessageId) {
   s.stealEggTracker.processed[event.id] = Date.now();
   s.stealEggTracker.recent = [event, ...(s.stealEggTracker.recent || [])].slice(0, 100);
   s.stealEggTracker.history = [event, ...(s.stealEggTracker.history || [])].slice(0, 5000);
-  s.stealEggTracker.stats = state;
+  s.stealEggTracker.stats = {...state};
   if (alertMessageId) s.stealEggTracker.processed[event.id] = { at: Date.now(), alertMessageId };
   if (typeof markDirty === 'function') markDirty();
 }
@@ -233,13 +234,14 @@ async function processEvent(raw) {
   if (now - event.spawnedAt > MAX_EVENT_AGE_SEC) return { ok: true, ignored: true, reason: 'stale-event' };
   state.lastEventAt = Date.now();
   state.lastSpawn = event;
-  if (seen(event.id)) { state.duplicates++; return { ok: true, deduped: true }; }
-  if (seen(event.id)) { state.duplicates++; return { ok: true, deduped: true, event }; }
+  if (seen(event.id) || inFlight.has(event.id)) { state.duplicates++; return { ok: true, deduped: true, event }; }
+  inFlight.add(event.id);
   rememberCache(event.id);
   return enqueue(async () => {
-    if (seen(event.id)) { state.duplicates++; return { ok: true, deduped: true, event }; }
+    if (seen(event.id)) { inFlight.delete(event.id); state.duplicates++; return { ok: true, deduped: true, event }; }
     try {
       const msg = await sendAlertWithRetry(event);
+      event.alertSent = true;
       remember(event, msg.id);
       state.alerts++;
       state.lastAlertAt = Date.now();
@@ -249,6 +251,8 @@ async function processEvent(raw) {
       state.errors++;
       console.error('[STEAL EGG TRACKER] alert failed:', e.stack || e.message);
       return { ok: false, alertFailed: true, event, error: e.message };
+    } finally {
+      inFlight.delete(event.id);
     }
   });
 }
@@ -275,7 +279,7 @@ async function fetchFeed(url = SOURCE_URL) {
     state.sourceOnline = true;
     state.sourceStatus = 'online';
     lastSourceError = null;
-    return Array.isArray(body) ? body : (body.events || body.spawns || body.data || [body]);
+    return Array.isArray(body) ? body : (body.events || body.spawns || body.results || body.data || body.items || (body.event ? [body.event] : [body]));
   } finally { clearTimeout(timeout); }
 }
 async function poll() {
@@ -302,7 +306,7 @@ async function poll() {
         state.lastSourceFailureAt = Date.now();
         lastSourceError = e.message;
         console.error('[STEAL EGG TRACKER] source failure:', e.message);
-        if (consecutiveSourceFailures < 3) break;
+        // Keep trying the next configured source immediately. A single primary outage must not disable fallbacks.
       }
     }
     if (events == null) {
@@ -315,6 +319,7 @@ async function poll() {
 }
 function startWebhook() {
   if (webhookServer) return;
+  if (!WEBHOOK_SECRET) console.warn('[STEAL EGG TRACKER] Webhook is running without a secret; use a private network or set STEAL_EGG_WEBHOOK_SECRET.');
   webhookServer = http.createServer((req,res) => {
     if (req.method === 'GET' && req.url === '/health') {
       res.writeHead(200, {'content-type':'application/json'});
@@ -331,7 +336,7 @@ function startWebhook() {
         if (size > 100000) throw new Error('Payload too large');
         if (!signatureOk(req, raw)) { res.writeHead(401); return res.end('Invalid signature'); }
         const body = JSON.parse(raw.toString('utf8'));
-        const list = Array.isArray(body) ? body : (body.events || body.spawns || body.data || [body]);
+        const list = Array.isArray(body) ? body : (body.events || body.spawns || body.results || body.data || body.items || (body.event ? [body.event] : [body]));
         const results = [];
         for (const item of list) results.push(await processEvent(item));
         res.writeHead(200, {'content-type':'application/json'});
@@ -370,7 +375,8 @@ function status() {
   const c = trackerConfig();
   return {...state, sourceOnline, lastSourceError, trackedRarities:c.trackedRarities, pollIntervalMs:POLL_MS,
     sourceConfigured:!!(SOURCE_URL || SECONDARY_SOURCE_URL || FALLBACK_SOURCE_URL), maxEventAgeSec:MAX_EVENT_AGE_SEC,
-    strictCatalog:STRICT, uptimeMs:state.startedAt ? Date.now()-state.startedAt : 0, sourceCount:[SOURCE_URL,SECONDARY_SOURCE_URL,FALLBACK_SOURCE_URL].filter(Boolean).length};
+    strictCatalog:STRICT, uptimeMs:state.startedAt ? Date.now()-state.startedAt : 0, sourceCount:[SOURCE_URL,SECONDARY_SOURCE_URL,FALLBACK_SOURCE_URL].filter(Boolean).length,
+    webhookEnabled:!!webhookServer, webhookAuthenticated:!!WEBHOOK_SECRET};
 }
 function trackerConfig() {
   const saved = store()?.stealEggTracker?.config || {};
@@ -422,8 +428,9 @@ function stats(period='all') {
   const rows=history.filter(x => now-(x.spawnedAt*1000) <= (windows[period] ?? Infinity));
   const by={}; for(const x of rows) by[x.rarity]=(by[x.rarity]||0)+1;
   const lat=rows.map(x => Number(x.detectionLatencyMs)).filter(Number.isFinite);
+  const alertsSent = rows.filter(x => x.alertSent).length;
   return {period,totalDetected:rows.length,divine:by.DIVINE||0,eternal:by.ETERNAL||0,secret:by.SECRET||0,
-    alertsSent:state.alerts,duplicatesPrevented:state.duplicates,sourceErrors:state.errors,
+    alertsSent,duplicatesPrevented:state.duplicates,sourceErrors:state.errors,
     averageDetectionLatencyMs:lat.length?Math.round(lat.reduce((a,b)=>a+b,0)/lat.length):0};
 }
 function recent(page=1,pageSize=5) {
